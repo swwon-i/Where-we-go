@@ -1,0 +1,423 @@
+{
+  "csv": "csv\\장소\\식품_일반음식점_서울특별시.csv",
+  "rows_with_coords": 505558,
+  "anchors": [
+    {
+      "label": "롯데월드타워·몰 (송파구 신천동 29)",
+      "jibun": "송파구 신천동 29",
+      "lat": 37.513,
+      "lon": 127.1027
+    },
+    {
+      "label": "코엑스 (강남구 삼성동 159)",
+      "jibun": "강남구 삼성동 159",
+      "lat": 37.5115,
+      "lon": 127.0595
+    },
+    {
+      "label": "서울역 (중구 봉래동2가 122)",
+      "jibun": "중구 봉래동2가 122",
+      "lat": 37.5547,
+      "lon": 126.9707
+    },
+    {
+      "label": "고속터미널 (서초구 반포동 19-4)",
+      "jibun": "서초구 반포동 19-4",
+      "lat": 37.5049,
+      "lon": 127.0048
+    },
+    {
+      "label": "63빌딩 (영등포구 여의도동 60)",
+      "jibun": "영등포구 여의도동 60",
+      "lat": 37.5197,
+      "lon": 126.94
+    },
+    {
+      "label": "IFC (영등포구 여의도동 23)",
+      "jibun": "영등포구 여의도동 23",
+      "lat": 37.525,
+      "lon": 126.9255
+    },
+    {
+      "label": "서울시청 (중구 태평로1가 31)",
+      "jibun": "중구 태평로1가 31",
+      "lat": 37.5663,
+      "lon": 126.9779
+    },
+    {
+      "label": "잠실종합운동장 (송파구 잠실동 10)",
+      "jibun": "송파구 잠실동 10",
+      "lat": 37.5152,
+      "lon": 127.0731
+    }
+  ],
+  "candidates": [
+    {
+      "label": "EPSG:5174 (PROJ 기본값)",
+      "crs": "EPSG:5174",
+      "bbox_ratio": 1.0,
+      "median_error_m": 128.4,
+      "sample_count": 2744,
+      "verdict": "PASS",
+      "per_anchor": [
+        {
+          "anchor": "롯데월드타워·몰 (송파구 신천동 29)",
+          "samples": 403,
+          "median_error_m": 65.6
+        },
+        {
+          "anchor": "코엑스 (강남구 삼성동 159)",
+          "samples": 1605,
+          "median_error_m": 128.4
+        },
+        {
+          "anchor": "서울역 (중구 봉래동2가 122)",
+          "samples": 72,
+          "median_error_m": 185.3
+        },
+        {
+          "anchor": "고속터미널 (서초구 반포동 19-4)",
+          "samples": 255,
+          "median_error_m": 211.1
+        },
+        {
+          "anchor": "63빌딩 (영등포구 여의도동 60)",
+          "samples": 45,
+          "median_error_m": 16.2
+        },
+        {
+          "anchor": "IFC (영등포구 여의도동 23)",
+          "samples": 290,
+          "median_error_m": 99.4
+        },
+        {
+          "anchor": "서울시청 (중구 태평로1가 31)",
+          "samples": 20,
+          "median_error_m": 126.9
+        },
+        {
+          "anchor": "잠실종합운동장 (송파구 잠실동 10)",
+          "samples": 54,
+          "median_error_m": 142.4
+        }
+      ]
+    },
+    {
+      "label": "EPSG:2097 (보정 미적용)",
+      "crs": "EPSG:2097",
+      "bbox_ratio": 1.0,
+      "median_error_m": 334.8,
+      "sample_count": 2744,
+      "verdict": "FAIL",
+      "per_anchor": [
+        {
+          "anchor": "롯데월드타워·몰 (송파구 신천동 29)",
+          "samples": 403,
+          "median_error_m": 190.6
+        },
+        {
+          "anchor": "코엑스 (강남구 삼성동 159)",
+          "samples": 1605,
+          "median_error_m": 334.8
+        },
+        {
+          "anchor": "서울역 (중구 봉래동2가 122)",
+          "samples": 72,
+          "median_error_m": 394.9
+        },
+        {
+          "anchor": "고속터미널 (서초구 반포동 19-4)",
+          "samples": 255,
+          "median_error_m": 88.3
+        },
+        {
+          "anchor": "63빌딩 (영등포구 여의도동 60)",
+          "samples": 45,
+          "median_error_m": 249.0
+        },
+        {
+          "anchor": "IFC (영등포구 여의도동 23)",
+          "samples": 290,
+          "median_error_m": 320.4
+        },
+        {
+          "anchor": "서울시청 (중구 태평로1가 31)",
+          "samples": 20,
+          "median_error_m": 233.8
+        },
+        {
+          "anchor": "잠실종합운동장 (송파구 잠실동 10)",
+          "samples": 54,
+          "median_error_m": 299.7
+        }
+      ]
+    },
+    {
+      "label": "Bessel 보정 + towgs84 7p",
+      "crs": "+proj=tmerc +lat_0=38 +lon_0=127.0028902777778 +k=1 +x_0=200000 +y_0=500000 +ellps=bessel +units=m +no_defs +towgs84=-145.907,505.034,685.756,-1.162,2.347,1.592,6.342",
+      "bbox_ratio": 1.0,
+      "median_error_m": 145.0,
+      "sample_count": 2744,
+      "verdict": "PASS",
+      "per_anchor": [
+        {
+          "anchor": "롯데월드타워·몰 (송파구 신천동 29)",
+          "samples": 403,
+          "median_error_m": 59.2
+        },
+        {
+          "anchor": "코엑스 (강남구 삼성동 159)",
+          "samples": 1605,
+          "median_error_m": 145.0
+        },
+        {
+          "anchor": "서울역 (중구 봉래동2가 122)",
+          "samples": 72,
+          "median_error_m": 201.9
+        },
+        {
+          "anchor": "고속터미널 (서초구 반포동 19-4)",
+          "samples": 255,
+          "median_error_m": 205.8
+        },
+        {
+          "anchor": "63빌딩 (영등포구 여의도동 60)",
+          "samples": 45,
+          "median_error_m": 27.9
+        },
+        {
+          "anchor": "IFC (영등포구 여의도동 23)",
+          "samples": 290,
+          "median_error_m": 96.0
+        },
+        {
+          "anchor": "서울시청 (중구 태평로1가 31)",
+          "samples": 20,
+          "median_error_m": 136.3
+        },
+        {
+          "anchor": "잠실종합운동장 (송파구 잠실동 10)",
+          "samples": 54,
+          "median_error_m": 156.4
+        }
+      ]
+    },
+    {
+      "label": "Bessel 보정 + towgs84 3p",
+      "crs": "+proj=tmerc +lat_0=38 +lon_0=127.0028902777778 +k=1 +x_0=200000 +y_0=500000 +ellps=bessel +units=m +no_defs +towgs84=-146.43,507.89,681.46",
+      "bbox_ratio": 1.0,
+      "median_error_m": 123.8,
+      "sample_count": 2744,
+      "verdict": "PASS",
+      "per_anchor": [
+        {
+          "anchor": "롯데월드타워·몰 (송파구 신천동 29)",
+          "samples": 403,
+          "median_error_m": 61.9
+        },
+        {
+          "anchor": "코엑스 (강남구 삼성동 159)",
+          "samples": 1605,
+          "median_error_m": 123.8
+        },
+        {
+          "anchor": "서울역 (중구 봉래동2가 122)",
+          "samples": 72,
+          "median_error_m": 181.5
+        },
+        {
+          "anchor": "고속터미널 (서초구 반포동 19-4)",
+          "samples": 255,
+          "median_error_m": 206.2
+        },
+        {
+          "anchor": "63빌딩 (영등포구 여의도동 60)",
+          "samples": 45,
+          "median_error_m": 8.5
+        },
+        {
+          "anchor": "IFC (영등포구 여의도동 23)",
+          "samples": 290,
+          "median_error_m": 106.9
+        },
+        {
+          "anchor": "서울시청 (중구 태평로1가 31)",
+          "samples": 20,
+          "median_error_m": 119.3
+        },
+        {
+          "anchor": "잠실종합운동장 (송파구 잠실동 10)",
+          "samples": 54,
+          "median_error_m": 135.7
+        }
+      ]
+    },
+    {
+      "label": "Bessel 무보정 + towgs84 7p",
+      "crs": "+proj=tmerc +lat_0=38 +lon_0=127 +k=1 +x_0=200000 +y_0=500000 +ellps=bessel +units=m +no_defs +towgs84=-145.907,505.034,685.756,-1.162,2.347,1.592,6.342",
+      "bbox_ratio": 1.0,
+      "median_error_m": 349.4,
+      "sample_count": 2744,
+      "verdict": "FAIL",
+      "per_anchor": [
+        {
+          "anchor": "롯데월드타워·몰 (송파구 신천동 29)",
+          "samples": 403,
+          "median_error_m": 202.4
+        },
+        {
+          "anchor": "코엑스 (강남구 삼성동 159)",
+          "samples": 1605,
+          "median_error_m": 349.4
+        },
+        {
+          "anchor": "서울역 (중구 봉래동2가 122)",
+          "samples": 72,
+          "median_error_m": 409.8
+        },
+        {
+          "anchor": "고속터미널 (서초구 반포동 19-4)",
+          "samples": 255,
+          "median_error_m": 105.0
+        },
+        {
+          "anchor": "63빌딩 (영등포구 여의도동 60)",
+          "samples": 45,
+          "median_error_m": 260.6
+        },
+        {
+          "anchor": "IFC (영등포구 여의도동 23)",
+          "samples": 290,
+          "median_error_m": 327.8
+        },
+        {
+          "anchor": "서울시청 (중구 태평로1가 31)",
+          "samples": 20,
+          "median_error_m": 249.9
+        },
+        {
+          "anchor": "잠실종합운동장 (송파구 잠실동 10)",
+          "samples": 54,
+          "median_error_m": 315.4
+        }
+      ]
+    },
+    {
+      "label": "[음성대조군] EPSG:5186",
+      "crs": "EPSG:5186",
+      "bbox_ratio": 0.0,
+      "median_error_m": 100489.5,
+      "sample_count": 2744,
+      "verdict": "FAIL",
+      "per_anchor": [
+        {
+          "anchor": "롯데월드타워·몰 (송파구 신천동 29)",
+          "samples": 403,
+          "median_error_m": 100489.5
+        },
+        {
+          "anchor": "코엑스 (강남구 삼성동 159)",
+          "samples": 1605,
+          "median_error_m": 100387.4
+        },
+        {
+          "anchor": "서울역 (중구 봉래동2가 122)",
+          "samples": 72,
+          "median_error_m": 100352.0
+        },
+        {
+          "anchor": "고속터미널 (서초구 반포동 19-4)",
+          "samples": 255,
+          "median_error_m": 100432.2
+        },
+        {
+          "anchor": "63빌딩 (영등포구 여의도동 60)",
+          "samples": 45,
+          "median_error_m": 100485.7
+        },
+        {
+          "anchor": "IFC (영등포구 여의도동 23)",
+          "samples": 290,
+          "median_error_m": 100557.5
+        },
+        {
+          "anchor": "서울시청 (중구 태평로1가 31)",
+          "samples": 20,
+          "median_error_m": 100381.6
+        },
+        {
+          "anchor": "잠실종합운동장 (송파구 잠실동 10)",
+          "samples": 54,
+          "median_error_m": 100358.7
+        }
+      ]
+    }
+  ],
+  "pairwise_spread": [
+    {
+      "pair": "EPSG:5174 (PROJ 기본값)  ↔  Bessel 보정 + towgs84 7p",
+      "median_m": 16.8,
+      "max_m": 17.2
+    },
+    {
+      "pair": "EPSG:5174 (PROJ 기본값)  ↔  Bessel 보정 + towgs84 3p",
+      "median_m": 7.6,
+      "max_m": 7.8
+    },
+    {
+      "pair": "Bessel 보정 + towgs84 7p  ↔  Bessel 보정 + towgs84 3p",
+      "median_m": 21.3,
+      "max_m": 21.6
+    }
+  ],
+  "adopted": {
+    "label": "Bessel 보정 + towgs84 3p",
+    "crs": "+proj=tmerc +lat_0=38 +lon_0=127.0028902777778 +k=1 +x_0=200000 +y_0=500000 +ellps=bessel +units=m +no_defs +towgs84=-146.43,507.89,681.46",
+    "bbox_ratio": 1.0,
+    "median_error_m": 123.8,
+    "sample_count": 2744,
+    "verdict": "PASS",
+    "per_anchor": [
+      {
+        "anchor": "롯데월드타워·몰 (송파구 신천동 29)",
+        "samples": 403,
+        "median_error_m": 61.9
+      },
+      {
+        "anchor": "코엑스 (강남구 삼성동 159)",
+        "samples": 1605,
+        "median_error_m": 123.8
+      },
+      {
+        "anchor": "서울역 (중구 봉래동2가 122)",
+        "samples": 72,
+        "median_error_m": 181.5
+      },
+      {
+        "anchor": "고속터미널 (서초구 반포동 19-4)",
+        "samples": 255,
+        "median_error_m": 206.2
+      },
+      {
+        "anchor": "63빌딩 (영등포구 여의도동 60)",
+        "samples": 45,
+        "median_error_m": 8.5
+      },
+      {
+        "anchor": "IFC (영등포구 여의도동 23)",
+        "samples": 290,
+        "median_error_m": 106.9
+      },
+      {
+        "anchor": "서울시청 (중구 태평로1가 31)",
+        "samples": 20,
+        "median_error_m": 119.3
+      },
+      {
+        "anchor": "잠실종합운동장 (송파구 잠실동 10)",
+        "samples": 54,
+        "median_error_m": 135.7
+      }
+    ]
+  }
+}
