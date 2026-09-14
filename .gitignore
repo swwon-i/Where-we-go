@@ -1,0 +1,28 @@
+# 원본 데이터 — 용량이 커 저장소에 올리지 않는다 (일반음식점 154MB, 버스 구간속도 141MB)
+# 출처와 수신 방법은 계획서 §3 참조. ETL이 이 경로를 읽는다.
+csv/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Java / Gradle
+build/
+.gradle/
+*.class
+
+# Node
+node_modules/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
