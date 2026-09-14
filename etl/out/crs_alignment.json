@@ -1,0 +1,67 @@
+{
+  "target_crs": "EPSG:5186",
+  "stop_count": 11494,
+  "poi_sample": 20000,
+  "candidates": [
+    {
+      "label": "EPSG:5174 (PROJ 기본값)",
+      "crs": "EPSG:5174",
+      "median_m": 80.5,
+      "p25_m": 47.8,
+      "p75_m": 122.5,
+      "p95_m": 202.1,
+      "within_100m_ratio": 0.6263,
+      "aligned": true
+    },
+    {
+      "label": "Bessel 보정 + towgs84 3p",
+      "crs": "+proj=tmerc +lat_0=38 +lon_0=127.0028902777778 +k=1 +x_0=200000 +y_0=500000 +ellps=bessel +units=m +no_defs +towgs84=-146.43,507.89,681.46",
+      "median_m": 80.7,
+      "p25_m": 47.8,
+      "p75_m": 123.1,
+      "p95_m": 202.4,
+      "within_100m_ratio": 0.6263,
+      "aligned": true
+    },
+    {
+      "label": "Bessel 보정 + towgs84 7p",
+      "crs": "+proj=tmerc +lat_0=38 +lon_0=127.0028902777778 +k=1 +x_0=200000 +y_0=500000 +ellps=bessel +units=m +no_defs +towgs84=-145.907,505.034,685.756,-1.162,2.347,1.592,6.342",
+      "median_m": 80.8,
+      "p25_m": 48.8,
+      "p75_m": 122.8,
+      "p95_m": 202.0,
+      "within_100m_ratio": 0.6253,
+      "aligned": true
+    },
+    {
+      "label": "EPSG:2097 (보정 미적용)",
+      "crs": "EPSG:2097",
+      "median_m": 104.7,
+      "p25_m": 64.0,
+      "p75_m": 157.5,
+      "p95_m": 250.3,
+      "within_100m_ratio": 0.4729,
+      "aligned": true
+    },
+    {
+      "label": "Bessel 무보정 + towgs84 7p",
+      "crs": "+proj=tmerc +lat_0=38 +lon_0=127 +k=1 +x_0=200000 +y_0=500000 +ellps=bessel +units=m +no_defs +towgs84=-145.907,505.034,685.756,-1.162,2.347,1.592,6.342",
+      "median_m": 105.3,
+      "p25_m": 64.6,
+      "p75_m": 158.2,
+      "p95_m": 252.7,
+      "within_100m_ratio": 0.4684,
+      "aligned": true
+    },
+    {
+      "label": "[음성대조군] EPSG:5186",
+      "crs": "EPSG:5186",
+      "median_m": 88259.3,
+      "p25_m": 84599.3,
+      "p75_m": 92147.8,
+      "p95_m": 95418.9,
+      "within_100m_ratio": 0.0,
+      "aligned": false
+    }
+  ]
+}
