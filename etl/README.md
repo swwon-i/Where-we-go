@@ -39,6 +39,44 @@ csv/
 원본 좌표계가 둘로 갈린다 — POI는 **EPSG:5174**(`좌표정보(X)/(Y)`), 정류장·역사는
 **EPSG:4326**(위도/경도). 저장은 전부 **EPSG:5186**으로 통일한다.
 
+## ingest — 인허가 적재 (단일 진입점)
+
+```bash
+docker compose up -d db
+docker compose --profile migrate run --rm flyway
+
+./.venv/Scripts/python.exe -X utf8 -m etl.ingest --source all
+```
+
+```
+CSV (CP949)  ──COPY──▶  poi_raw  ──변환·중복제거──▶  poi_staging
+                                                        │ 검수 규칙
+                                                        ▼
+                                              validation_result
+                                                        │ ERROR 제외분
+                                                        ▼
+                                                      poi
+```
+
+| 옵션 | |
+|---|---|
+| `--source food\|rest\|all` | 적재 대상 |
+| `--limit N` | 앞 N행만 (시험용) |
+| `--force` | 파일 해시가 같아도 다시 적재 |
+| `--snapshot PATH` | 원본 경로 덮어쓰기. 다른 회차 스냅샷이나 실패 격리 시험용 |
+
+**실측 (2026-09-15)**: 서울 전체 685,718행(일반 538,576 + 휴게 147,142) **2분 28초**.
+serving `poi` 646,418건 — ACTIVE 154,669 / CLOSED 491,749.
+
+### 알아둘 것
+
+- **좌표 변환은 여기서만** 한다. DB는 `ST_Transform` 을 쓰지 않는다 (`verify_db_crs.py` 참조)
+- staging 적재 직후 **`ANALYZE poi_staging` 이 필수**다. 트랜잭션 안이라 autoanalyze 가 손대지 못하는데,
+  통계가 낡으면 `DUPLICATE_NAME_ADDR` 조인이 nested loop 로 풀려 **8분 넘게** 걸린다 (실측)
+- `poi_staging` 은 현재·직전 회차만 남기고 정리한다. 안 그러면 회차마다 수십만 행씩 쌓여
+  일일 자동 실행 열흘이면 500만 행이 된다
+- 실패하면 회차가 FAILED 로 남고 **serving 은 무변경**이다 (단일 트랜잭션)
+
 ## verify_coords — 좌표계 판정 (D0)
 
 인허가 좌표의 원본 좌표계를 앵커 대조로 판정한다. 어느 EPSG인지 파일에 적혀 있지 않고,

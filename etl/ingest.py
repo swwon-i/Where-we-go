@@ -1,0 +1,606 @@
+"""인허가 CSV 적재 — 단일 진입점.
+
+    CSV (CP949)
+        │  COPY 벌크 로드
+        ▼
+    poi_raw          원본 그대로. 제약 없음
+        │  타입 변환 · 좌표 변환(5174 → 5186) · 중복 제거
+        ▼
+    poi_staging
+        │  검수 규칙 (etl/validate/rules/*.sql)
+        ▼
+    validation_result
+        │  ERROR 제외분만 UPSERT
+        ▼
+    poi              API 가 읽는 유일한 테이블
+
+원칙 (계획서 §6·§7)
+-------------------
+* **좌표 변환은 여기서만** 한다. DB는 저장만 하고 ST_Transform 을 쓰지 않는다 —
+  두 엔진이 EPSG:5174 를 다르게 해석할 여지를 없앤다. (`verify_db_crs.py` 로 확인)
+* serving 은 **항상 UPSERT**. 테이블 교체(swap)를 쓰지 않는다 —
+  전체분 재적재가 일 변동분으로 갱신한 영업상태를 덮어쓰기 때문이다.
+* 폐업은 삭제가 아니라 `status='CLOSED'`. 소멸(파일에서 사라짐)은 별개 사건으로 센다.
+* 실패하면 회차를 FAILED 로 남기고 **serving 은 건드리지 않는다**.
+
+사용법
+-----
+    python -m etl.ingest --source all
+    python -m etl.ingest --source food --limit 50000
+    python -m etl.ingest --source all --force      # 해시가 같아도 다시 적재
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import io
+import sys
+import time
+from dataclasses import replace
+from datetime import date, datetime
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from pyproj import CRS, Transformer
+
+from etl.db import connect
+from etl.sources import (
+    ACTIVE_STATUS_NAMES,
+    KOREAN_HEADER,
+    RAW_COLUMNS,
+    SOURCE_EPSG,
+    SOURCES,
+    TARGET_EPSG,
+    Source,
+)
+
+RULES_DIR = Path(__file__).parent / "validate" / "rules"
+
+#: 파일 기반 규칙. 순서는 보고용이며 서로 독립이다.
+FILE_RULES = [
+    "NAME_MISSING",
+    "COORD_MISSING",
+    "STATUS_DATE_CONFLICT",
+    "DATE_LOGIC_ERROR",
+    "DUPLICATE_NAME_ADDR",
+]
+
+#: CSV → poi_raw COPY 청크 크기
+CHUNK_ROWS = 50_000
+
+#: 서울을 넉넉히 감싸는 사각형(5186). **실제 행정경계가 아니다.**
+#: 검수 규칙이 아니라 좌표 변환이 깨졌는지 보는 계기판이며, 개별 건수가 아니라 자릿수를 본다.
+SEOUL_5186_BOUNDS = (170_000.0, 520_000.0, 230_000.0, 580_000.0)
+
+#: 이 비율을 넘으면 변환이 깨진 것으로 본다. 정상이면 0.001% 수준이다.
+OUTSIDE_ALARM_RATIO = 0.01
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 순수 함수
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def file_hash(path: Path, chunk: int = 1 << 20) -> str:
+    """파일 SHA-256. 조건부 요청(ETag/Last-Modified)이 안 되는 서버를 대비한 변경 감지 수단."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while block := f.read(chunk):
+            h.update(block)
+    return h.hexdigest()
+
+
+def parse_date(value: object) -> date | None:
+    """인허가 CSV의 날짜. `YYYY-MM-DD` 와 `YYYYMMDD` 가 섞여 있고 공백·빈칸이 흔하다."""
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y%m%d", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(s[: len(fmt) + 2].strip(), fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def is_active(status_name: object) -> bool:
+    """영업상태명이 영업 중을 뜻하는가."""
+    return isinstance(status_name, str) and status_name.strip() in ACTIVE_STATUS_NAMES
+
+
+def normalize_category(raw: object) -> str | None:
+    """업태구분명을 정규화 코드로. 표기 흔들림(공백·중점)을 흡수한다."""
+    if not isinstance(raw, str):
+        return None
+    s = raw.strip().replace(" ", "").replace("·", "")
+    return s or None
+
+
+def make_transformer() -> Transformer:
+    """5174 → 5186. always_xy 이므로 (동, 북) 순서."""
+    return Transformer.from_crs(
+        CRS.from_epsg(SOURCE_EPSG), CRS.from_epsg(TARGET_EPSG), always_xy=True
+    )
+
+
+def transform_coords(
+    x: np.ndarray, y: np.ndarray, transformer: Transformer | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """5174 좌표 배열을 5186 으로. 결측(NaN)은 NaN 으로 남는다."""
+    t = transformer or make_transformer()
+    east, north = t.transform(x, y)
+    return np.asarray(east, dtype=float), np.asarray(north, dtype=float)
+
+
+def count_outside_seoul(east: np.ndarray, north: np.ndarray) -> int:
+    """서울 경계 밖 좌표 수. 검수 규칙이 아니라 변환 상태를 보는 계기판이다."""
+    x0, y0, x1, y1 = SEOUL_5186_BOUNDS
+    ok = np.isfinite(east) & np.isfinite(north)
+    inside = (east >= x0) & (east <= x1) & (north >= y0) & (north <= y1)
+    return int((ok & ~inside).sum())
+
+
+def dedupe_by_source_id(df: pd.DataFrame) -> pd.DataFrame:
+    """같은 관리번호가 여러 건이면 마지막 것만 남긴다.
+
+    raw 에는 제약을 걸지 않으므로 중복이 그대로 들어온다. serving 은
+    `UNIQUE(source, source_id)` 라 여기서 정리하지 않으면 UPSERT 가 실패한다.
+    """
+    return df.drop_duplicates(subset=["source_id"], keep="last")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 적재 단계
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def start_run(conn, source: Source, mode: str, digest: str) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO ingest_run (source, snapshot_date, mode, status, source_hash)
+            VALUES (%s, %s, %s, 'RUNNING', %s) RETURNING id
+            """,
+            (source.code, date.today(), mode, digest),
+        )
+        return cur.fetchone()[0]
+
+
+def previous_successful_run(conn, source_code: str, exclude_id: int) -> int | None:
+    """직전 성공 회차. 회차 diff 와 COORD_MOVED 규칙의 기준이 된다."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id FROM ingest_run
+            WHERE source = %s AND status = 'SUCCESS' AND id <> %s
+            ORDER BY id DESC LIMIT 1
+            """,
+            (source_code, exclude_id),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def unchanged_since_last_run(conn, source_code: str, digest: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT source_hash FROM ingest_run
+            WHERE source = %s AND status = 'SUCCESS'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (source_code,),
+        )
+        row = cur.fetchone()
+        return bool(row and row[0] == digest)
+
+
+def copy_raw(conn, run_id: int, source: Source, limit: int | None) -> int:
+    """CSV → poi_raw. COPY 로 청크 단위 벌크 로드."""
+    columns = ", ".join(["run_id", *RAW_COLUMNS])
+    total = 0
+    reader = pd.read_csv(
+        source.path,
+        encoding=source.encoding,
+        dtype=str,
+        chunksize=CHUNK_ROWS,
+        nrows=limit,
+        on_bad_lines="skip",
+        low_memory=False,
+    )
+    with conn.cursor() as cur:
+        for chunk in reader:
+            if len(chunk.columns) != len(KOREAN_HEADER):
+                raise ValueError(
+                    f"컬럼 수가 다르다: {len(chunk.columns)} (기대 {len(KOREAN_HEADER)}). "
+                    "원본 스키마가 바뀌었는지 확인할 것"
+                )
+            chunk = chunk.where(pd.notna(chunk), None)
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            for row in chunk.itertuples(index=False, name=None):
+                writer.writerow([run_id, *row])
+            buf.seek(0)
+            with cur.copy(f"COPY poi_raw ({columns}) FROM STDIN WITH (FORMAT csv)") as cp:
+                cp.write(buf.read())
+            total += len(chunk)
+    return total
+
+
+def build_staging(conn, run_id: int) -> tuple[int, int]:
+    """poi_raw → poi_staging. 타입·좌표 변환과 중복 제거를 여기서 한다.
+
+    `(staging 행 수, 서울 밖 좌표 수)` 를 돌려준다.
+    """
+    cols = [
+        "mgmt_no", "biz_name", "biz_type_name", "road_address", "jibun_address",
+        "phone", "biz_status_name", "license_date", "closed_date", "coord_x", "coord_y",
+    ]
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT {', '.join(cols)} FROM poi_raw WHERE run_id = %s", (run_id,)
+        )
+        df = pd.DataFrame(cur.fetchall(), columns=cols, dtype=object)
+
+    out = pd.DataFrame(
+        {
+            "source_id": df["mgmt_no"].str.strip(),
+            "name": df["biz_name"].str.strip(),
+            "category_raw": df["biz_type_name"].str.strip(),
+            "road_address": df["road_address"].str.strip(),
+            "jibun_address": df["jibun_address"].str.strip(),
+            "phone": df["phone"].str.strip(),
+            "biz_status_name": df["biz_status_name"].str.strip(),
+            "licensed_date": df["license_date"].map(parse_date),
+            "closed_date": df["closed_date"].map(parse_date),
+            "coord_x_raw": pd.to_numeric(df["coord_x"].str.strip(), errors="coerce"),
+            "coord_y_raw": pd.to_numeric(df["coord_y"].str.strip(), errors="coerce"),
+        }
+    )
+    out = out[out["source_id"].notna() & (out["source_id"] != "")]
+    out = dedupe_by_source_id(out)
+
+    east, north = transform_coords(
+        out["coord_x_raw"].to_numpy(), out["coord_y_raw"].to_numpy()
+    )
+    outside = count_outside_seoul(east, north)
+    out["east"], out["north"] = east, north
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    for r in out.itertuples(index=False):
+        writer.writerow(
+            [
+                run_id, r.source_id, r.name, r.category_raw, r.road_address,
+                r.jibun_address, r.phone, r.biz_status_name,
+                r.licensed_date or "", r.closed_date or "",
+                "" if not np.isfinite(r.east) else r.east,
+                "" if not np.isfinite(r.north) else r.north,
+                "" if not np.isfinite(r.coord_x_raw) else r.coord_x_raw,
+                "" if not np.isfinite(r.coord_y_raw) else r.coord_y_raw,
+            ]
+        )
+    buf.seek(0)
+
+    with conn.cursor() as cur:
+        cur.execute("CREATE TEMP TABLE _stg (LIKE poi_staging) ON COMMIT DROP")
+        cur.execute("ALTER TABLE _stg DROP COLUMN id, DROP COLUMN geom, DROP COLUMN is_valid")
+        cur.execute("ALTER TABLE _stg ADD COLUMN east float8, ADD COLUMN north float8")
+        with cur.copy(
+            "COPY _stg (run_id, source_id, name, category_raw, road_address, "
+            "jibun_address, phone, biz_status_name, licensed_date, closed_date, "
+            "east, north, coord_x_raw, coord_y_raw) FROM STDIN WITH (FORMAT csv)"
+        ) as cp:
+            cp.write(buf.read())
+        cur.execute(
+            """
+            INSERT INTO poi_staging (
+                run_id, source_id, name, category_raw, road_address, jibun_address,
+                phone, biz_status_name, licensed_date, closed_date, geom,
+                coord_x_raw, coord_y_raw)
+            SELECT run_id, source_id, name, category_raw, road_address, jibun_address,
+                   phone, biz_status_name, licensed_date, closed_date,
+                   CASE WHEN east IS NULL OR north IS NULL THEN NULL
+                        ELSE ST_SetSRID(ST_MakePoint(east, north), %s) END,
+                   coord_x_raw, coord_y_raw
+            FROM _stg
+            """,
+            (TARGET_EPSG,),
+        )
+        # 방금 넣은 수십만 행을 플래너가 보게 한다.
+        # 트랜잭션 안이라 autoanalyze 가 손대지 못하고, 통계가 낡으면 검수 규칙의
+        # 조인이 nested loop 로 풀려 몇 분씩 걸린다 (DUPLICATE_NAME_ADDR 에서 실측).
+        cur.execute("ANALYZE poi_staging")
+    return len(out), outside
+
+
+def run_validations(conn, run_id: int, prev_run_id: int | None) -> dict[str, int]:
+    """검수 규칙 실행 → validation_result. 규칙별 적중 건수를 돌려준다."""
+    counts: dict[str, int] = {}
+    with conn.cursor() as cur:
+        for rule in FILE_RULES:
+            sql = (RULES_DIR / f"{rule}.sql").read_text(encoding="utf-8")
+            cur.execute(sql, {"run_id": run_id})
+            counts[rule] = cur.rowcount
+
+        if prev_run_id is not None:
+            sql = (RULES_DIR / "COORD_MOVED.sql").read_text(encoding="utf-8")
+            cur.execute(sql, {"run_id": run_id, "prev_run_id": prev_run_id})
+            counts["COORD_MOVED"] = cur.rowcount
+
+        # ERROR 판정을 staging 에 반영 — serving 은 is_valid 인 행만 가져간다
+        cur.execute(
+            """
+            UPDATE poi_staging s SET is_valid = FALSE
+            WHERE s.run_id = %(run_id)s AND EXISTS (
+                SELECT 1 FROM validation_result v
+                WHERE v.run_id = %(run_id)s AND v.severity = 'ERROR'
+                  AND v.target_id = s.source_id)
+            """,
+            {"run_id": run_id},
+        )
+    return counts
+
+
+def upsert_categories(conn, run_id: int) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO category_map (category_raw, category_code, display_name)
+            SELECT DISTINCT category_raw,
+                   replace(replace(category_raw, ' ', ''), '·', ''),
+                   category_raw
+            FROM poi_staging
+            WHERE run_id = %s AND category_raw IS NOT NULL AND category_raw <> ''
+            ON CONFLICT (category_raw) DO NOTHING
+            """,
+            (run_id,),
+        )
+        return cur.rowcount
+
+
+def upsert_serving(conn, run_id: int, source_code: str) -> None:
+    """검수 통과분만 poi 로 UPSERT. 단일 트랜잭션이므로 실패 시 serving 은 무변경."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO poi (
+                source, source_id, name, category_code, category_raw,
+                road_address, jibun_address, phone, geom, status,
+                licensed_date, closed_date,
+                first_seen_run_id, last_seen_run_id, validated_run_id)
+            SELECT %(source)s, s.source_id, s.name,
+                   replace(replace(s.category_raw, ' ', ''), '·', ''), s.category_raw,
+                   s.road_address, s.jibun_address, s.phone, s.geom,
+                   CASE WHEN s.biz_status_name = ANY(%(active)s) THEN 'ACTIVE' ELSE 'CLOSED' END,
+                   s.licensed_date, s.closed_date,
+                   %(run_id)s, %(run_id)s, %(run_id)s
+            FROM poi_staging s
+            WHERE s.run_id = %(run_id)s AND s.is_valid AND s.geom IS NOT NULL
+            ON CONFLICT (source, source_id) DO UPDATE SET
+                -- POI 본체는 최신 원본으로 갱신하고, first_seen 은 보존한다
+                name             = EXCLUDED.name,
+                category_code    = EXCLUDED.category_code,
+                category_raw     = EXCLUDED.category_raw,
+                road_address     = EXCLUDED.road_address,
+                jibun_address    = EXCLUDED.jibun_address,
+                phone            = EXCLUDED.phone,
+                geom             = EXCLUDED.geom,
+                status           = EXCLUDED.status,
+                licensed_date    = EXCLUDED.licensed_date,
+                closed_date      = EXCLUDED.closed_date,
+                last_seen_run_id = EXCLUDED.last_seen_run_id,
+                validated_run_id = EXCLUDED.validated_run_id,
+                updated_at       = now()
+            """,
+            {
+                "source": source_code,
+                "run_id": run_id,
+                "active": list(ACTIVE_STATUS_NAMES),
+            },
+        )
+
+
+def diff_against_previous(conn, run_id: int, prev_run_id: int | None) -> dict[str, int]:
+    """직전 회차와 비교해 신규/유지/소멸을 센다.
+
+    `ingest_run` 의 건수 컬럼은 **여기서만** 채워진다 — 영업상태 컬럼만 읽어서는 알 수 없다.
+    소멸은 '원본 파일에서 레코드가 사라진 것'이며 폐업과는 다른 사건이다.
+    """
+    if prev_run_id is None:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM poi_staging WHERE run_id = %s", (run_id,)
+            )
+            return {"new": cur.fetchone()[0], "kept": 0, "vanished": 0}
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              count(*) FILTER (WHERE p.source_id IS NULL) AS new,
+              count(*) FILTER (WHERE c.source_id IS NOT NULL AND p.source_id IS NOT NULL) AS kept,
+              count(*) FILTER (WHERE c.source_id IS NULL) AS vanished
+            FROM (SELECT source_id FROM poi_staging WHERE run_id = %(cur)s) c
+            FULL OUTER JOIN
+                 (SELECT source_id FROM poi_staging WHERE run_id = %(prev)s) p
+              ON c.source_id = p.source_id
+            """,
+            {"cur": run_id, "prev": prev_run_id},
+        )
+        new, kept, vanished = cur.fetchone()
+    return {"new": new, "kept": kept, "vanished": vanished}
+
+
+def mark_vanished_as_closed(conn, source_code: str, run_id: int) -> int:
+    """최신 회차에 없는 POI 를 CLOSED 로. 행을 지우지 않는다."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE poi SET status = 'CLOSED', updated_at = now()
+            WHERE source = %s AND status = 'ACTIVE'
+              AND (last_seen_run_id IS NULL OR last_seen_run_id < %s)
+            """,
+            (source_code, run_id),
+        )
+        return cur.rowcount
+
+
+def prune_staging(conn, source_code: str, keep_run_ids: list[int]) -> int:
+    """오래된 staging 회차를 버린다.
+
+    회차 diff 는 **직전 회차 하나만** 필요한데, 남겨두면 회차마다 수십만 행씩 쌓인다.
+    일일 자동 실행을 걸면 열흘이면 500만 행이 된다. raw 는 재생성용으로 보존하되
+    staging 은 현재·직전만 남긴다.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM poi_staging s
+            USING ingest_run r
+            WHERE s.run_id = r.id AND r.source = %s AND s.run_id <> ALL(%s)
+            """,
+            (source_code, keep_run_ids),
+        )
+        return cur.rowcount
+
+
+def finish_run(conn, run_id: int, status: str, stats: dict, error: str | None = None) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE ingest_run SET
+                status = %(status)s, finished_at = now(),
+                duration_ms = %(duration)s,
+                rows_total = %(total)s, rows_valid = %(valid)s, rows_rejected = %(rejected)s,
+                rows_new = %(new)s, rows_kept = %(kept)s,
+                rows_vanished = %(vanished)s, rows_closed = %(closed)s,
+                error_message = %(error)s
+            WHERE id = %(id)s
+            """,
+            {"id": run_id, "status": status, "error": error, **stats},
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 오케스트레이션
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def ingest_source(conn, source: Source, limit: int | None, force: bool) -> dict:
+    print(f"\n── {source.label} ({source.code})")
+    if not source.path.exists():
+        raise FileNotFoundError(f"원본이 없다: {source.path}")
+
+    t0 = time.monotonic()
+    digest = file_hash(source.path)
+    print(f"   해시 {digest[:16]}…")
+
+    if not force and unchanged_since_last_run(conn, source.code, digest):
+        run_id = start_run(conn, source, "FULL", digest)
+        finish_run(conn, run_id, "SKIPPED", dict.fromkeys(
+            ["duration", "total", "valid", "rejected", "new", "kept", "vanished", "closed"], 0))
+        conn.commit()
+        print("   직전 회차와 동일 → SKIPPED")
+        return {"status": "SKIPPED", "run_id": run_id}
+
+    run_id = start_run(conn, source, "FULL", digest)
+    prev_run_id = previous_successful_run(conn, source.code, run_id)
+    conn.commit()  # 회차 시작은 먼저 확정해 둔다 — 실패해도 기록이 남아야 한다
+
+    try:
+        raw_rows = copy_raw(conn, run_id, source, limit)
+        print(f"   raw      {raw_rows:,}행")
+
+        stg_rows, outside = build_staging(conn, run_id)
+        print(f"   staging  {stg_rows:,}행 (중복 제거 {raw_rows - stg_rows:,})")
+        # 검수 규칙이 아니라 계기판이다. bbox 는 실제 행정경계가 아니라 넉넉한 사각형이라
+        # 몇 건이 밖에 있는지는 의미가 없다 — 의미 있는 것은 **자릿수**다.
+        # 좌표 변환이 깨지면 몇 건이 아니라 수십만 건이 밖으로 나간다.
+        if stg_rows and outside / stg_rows > OUTSIDE_ALARM_RATIO:
+            print(f"   ⚠ 서울 경계 밖 좌표 {outside:,}건 "
+                  f"({outside / stg_rows * 100:.1f}%) — 좌표 변환을 의심할 것")
+        elif outside:
+            print(f"   (경계 밖 {outside}건 — 정상 범위)")
+
+        rule_counts = run_validations(conn, run_id, prev_run_id)
+        for rule, n in rule_counts.items():
+            print(f"     {rule:<22} {n:>8,}")
+
+        upsert_categories(conn, run_id)
+        upsert_serving(conn, run_id, source.code)
+        closed = mark_vanished_as_closed(conn, source.code, run_id)
+        counts = diff_against_previous(conn, run_id, prev_run_id)
+
+        keep = [run_id] + ([prev_run_id] if prev_run_id else [])
+        pruned = prune_staging(conn, source.code, keep)
+        if pruned:
+            print(f"   staging 정리 {pruned:,}행 (현재·직전 회차만 보존)")
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM poi_staging WHERE run_id = %s AND is_valid", (run_id,)
+            )
+            valid = cur.fetchone()[0]
+
+        finish_run(conn, run_id, "SUCCESS", {
+            "duration": int((time.monotonic() - t0) * 1000),
+            "total": raw_rows, "valid": valid, "rejected": stg_rows - valid,
+            "new": counts["new"], "kept": counts["kept"],
+            "vanished": counts["vanished"], "closed": closed,
+        })
+        conn.commit()
+        print(f"   → SUCCESS  유효 {valid:,} / 거절 {stg_rows - valid:,} / "
+              f"신규 {counts['new']:,} · 유지 {counts['kept']:,} · 소멸 {counts['vanished']:,}")
+        return {"status": "SUCCESS", "run_id": run_id}
+
+    except Exception as e:  # noqa: BLE001 — 어떤 실패든 회차에 남기고 serving 은 보존한다
+        conn.rollback()
+        finish_run(conn, run_id, "FAILED", dict.fromkeys(
+            ["duration", "total", "valid", "rejected", "new", "kept", "vanished", "closed"], 0),
+            error=str(e)[:2000])
+        conn.commit()
+        print(f"   → FAILED: {e}", file=sys.stderr)
+        raise
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="인허가 CSV 적재")
+    parser.add_argument("--source", default="all", choices=[*SOURCES, "all"])
+    parser.add_argument("--limit", type=int, default=None, help="읽을 행 수 (시험용)")
+    parser.add_argument("--force", action="store_true", help="해시가 같아도 다시 적재")
+    parser.add_argument(
+        "--snapshot",
+        default=None,
+        help="원본 파일 경로를 덮어쓴다. 다른 회차 스냅샷을 넣거나 실패 격리를 시험할 때 쓴다. "
+             "--source 를 하나로 지정해야 한다.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.snapshot and args.source == "all":
+        parser.error("--snapshot 은 --source 를 하나로 지정해야 한다")
+
+    targets = list(SOURCES.values()) if args.source == "all" else [SOURCES[args.source]]
+    if args.snapshot:
+        targets = [replace(targets[0], path=Path(args.snapshot))]
+
+    with connect() as conn:
+        for source in targets:
+            ingest_source(conn, source, args.limit, args.force)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT status, count(*) FROM poi GROUP BY status ORDER BY status"
+            )
+            rows = cur.fetchall()
+    print("\npoi 합계:", ", ".join(f"{s} {n:,}" for s, n in rows) or "없음")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
