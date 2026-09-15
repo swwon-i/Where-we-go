@@ -1,0 +1,41 @@
+services:
+  db:
+    image: postgis/postgis:17-3.5
+    container_name: wwg-db
+    environment:
+      POSTGRES_DB: wherewego
+      POSTGRES_USER: wherewego
+      POSTGRES_PASSWORD: wherewego
+      # 한글 데이터를 다루므로 인코딩을 못박는다.
+      # ko_KR.utf8 은 이 이미지(Debian)에 없어 initdb 가 실패한다 — C.UTF-8 을 쓴다.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wherewego -d wherewego"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # 일회성 실행. `docker compose --profile migrate run --rm flyway`
+  flyway:
+    image: flyway/flyway:11-alpine
+    container_name: wwg-flyway
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./server/src/main/resources/db/migration:/flyway/sql:ro
+    command: >
+      -url=jdbc:postgresql://db:5432/wherewego
+      -user=wherewego
+      -password=wherewego
+      -connectRetries=10
+      -baselineOnMigrate=true
+      migrate
+    profiles: ["migrate"]
+
+volumes:
+  pgdata:
