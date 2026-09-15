@@ -26,3 +26,13 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# 카카오맵 JavaScript 키 (개발용). 발급: developers.kakao.com
+server/.env
+
+# Gradle 빌드 산출물 (wrapper 는 커밋한다)
+server/build/
+server/.gradle/
+
+# 프론트 빌드 결과 — web/ 이 소스이고 Docker 가 빌드한다
+server/src/main/resources/static/
