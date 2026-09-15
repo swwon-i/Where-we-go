@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: where-we-go
+  datasource:
+    # docker-compose.yml 의 값과 같다. 운영이라면 환경변수로 뺄 자리다.
+    url: ${WWG_DB_URL:jdbc:postgresql://localhost:5432/wherewego}
+    username: ${WWG_DB_USER:wherewego}
+    password: ${WWG_DB_PASSWORD:wherewego}
+  # 스키마는 Flyway 컨테이너가 이미 적용해 둔다 (docker compose --profile migrate).
+  # 서버 기동 때 다시 돌리지 않는다 — 적용 주체를 하나로 둔다.
+  flyway:
+    enabled: false
+
+wwg:
+  # 카카오맵 JavaScript 키. 저장소에 넣지 않는다 —
+  # 환경변수 WWG_KAKAO_JS_KEY 나 server/.env 에서 읽는다 (둘 다 .gitignore 대상).
+  kakao-js-key: ${WWG_KAKAO_JS_KEY:}
+
+server:
+  port: 8080
+
+logging:
+  level:
+    org.springframework.jdbc.core: INFO

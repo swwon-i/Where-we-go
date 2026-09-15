@@ -1,0 +1,54 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '4.1.1'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.wherewego'
+version = '0.0.1-SNAPSHOT'
+
+java {
+    toolchain {
+        // IntelliJ 가 ~/.jdks 에 받아둔 JDK 25 를 쓴다.
+        // 없으면 Gradle 이 알아서 내려받는다.
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    // JPA/Hibernate Spatial 은 쓰지 않는다 — geometry 매핑에서 시간을 태운다 (계획서 §2).
+    // 공간 쿼리를 SQL 로 직접 쓰기 위해 JdbcTemplate 을 쓴다.
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    runtimeOnly 'org.postgresql:postgresql'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+/*
+ * 저장소 루트의 .env 를 bootRun 환경으로 넘긴다.
+ *
+ * Spring Boot 는 .env 를 읽지 않는다 — application.yml 의 ${WWG_KAKAO_JS_KEY:} 는
+ * OS 환경변수만 본다. Docker Compose 는 루트 .env 를 자동으로 읽으므로,
+ * 여기서 같은 파일을 읽어주면 컨테이너로 띄우든 bootRun 으로 띄우든 설정이 하나로 유지된다.
+ */
+tasks.named('bootRun') {
+    def envFile = rootProject.file('../.env')
+    if (envFile.exists()) {
+        envFile.readLines('UTF-8').each { line ->
+            line = line.trim()
+            if (line.isEmpty() || line.startsWith('#') || !line.contains('=')) return
+            def idx = line.indexOf('=')
+            environment line[0..<idx].trim(), line[(idx + 1)..-1].trim()
+        }
+    }
+}
