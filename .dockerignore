@@ -1,0 +1,12 @@
+# 빌드 컨텍스트에서 제외 — 이미지에 들어갈 이유가 없고 전송만 느려진다.
+csv/
+.venv/
+.git/
+etl/
+node_modules/
+web/node_modules/
+web/dist/
+server/build/
+server/.gradle/
+server/.env
+**/__pycache__/

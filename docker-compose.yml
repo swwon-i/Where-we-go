@@ -37,5 +37,25 @@ services:
       migrate
     profiles: ["migrate"]
 
+  server:
+    build:
+      # web/ 과 server/ 를 모두 봐야 하므로 컨텍스트는 저장소 루트다.
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: wwg-server
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # 컨테이너 안에서는 localhost 가 아니라 compose 네트워크의 서비스 이름으로 붙는다.
+      WWG_DB_URL: jdbc:postgresql://db:5432/wherewego
+      WWG_DB_USER: wherewego
+      WWG_DB_PASSWORD: wherewego
+      # 카카오맵 JavaScript 키. 없으면 지도 자리에 발급 안내가 뜬다.
+      WWG_KAKAO_JS_KEY: ${WWG_KAKAO_JS_KEY:-}
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
 volumes:
   pgdata:
