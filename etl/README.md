@@ -77,6 +77,42 @@ serving `poi` 646,418건 — ACTIVE 154,669 / CLOSED 491,749.
   일일 자동 실행 열흘이면 500만 행이 된다
 - 실패하면 회차가 FAILED 로 남고 **serving 은 무변경**이다 (단일 트랜잭션)
 
+## 일일 자동 실행
+
+```cmd
+etl\register_daily_task.cmd
+```
+
+Windows 작업 스케줄러에 `WhereWeGo-DailyIngest` 를 **매일 04:30** 으로 등록한다.
+관리자 권한이 필요 없다. LOCALDATA 가 2일 전 기준으로 갱신되므로 새벽에 돌려 그날 최신본을 받는다.
+
+| | |
+|---|---|
+| 즉시 실행 | `schtasks /Run /TN "WhereWeGo-DailyIngest"` |
+| 상태 확인 | `schtasks /Query /TN "WhereWeGo-DailyIngest" /V /FO LIST` |
+| 해제 | `schtasks /Delete /TN "WhereWeGo-DailyIngest" /F` |
+| 로그 | `etl/out/logs/ingest-YYYYMMDD.log` |
+
+**목적은 회차를 쌓는 것이다.** `/admin/ingest-runs` 표가 README 의 증거인데 회차가 한둘이면
+파이프라인이 돌고 있다는 것이 보이지 않는다. 일찍 걸수록 많이 쌓인다.
+
+### 도커가 꺼져 있는 날
+
+`ingest` 는 DB 에 닿지 못하면 **회차를 만들지 않고 종료 코드 3** 으로 물러난다.
+`run_daily.cmd` 가 이를 0 으로 바꿔 스케줄러 기록에 실패로 남기지 않는다.
+
+적재를 시도하다 깨진 것(FAILED)과 아예 시작하지 못한 것은 다른 사건이다. 구분하지 않으면
+도커를 안 켠 날마다 FAILED 가 쌓여 `/admin/ingest-runs` 가 "자주 깨지는 파이프라인"처럼 읽힌다.
+
+### 스크립트가 ASCII 전용인 이유
+
+`run_daily.cmd` 와 `register_daily_task.cmd` 에는 한글 주석이 없다. 스케줄러가 어떤 콘솔
+코드페이지로 부를지 알 수 없고, CP949 가 아닌 환경에서 한글 주석이 깨지면 **주석 조각이
+명령으로 실행된다**(실제로 겪었다). 설명은 이 문서에 둔다.
+
+배치의 함정 하나 더 — `echo ... %CODE%>> file` 은 값이 숫자로 끝나면 `0>>` 가 **스트림 0
+리다이렉션**으로 해석돼 값이 사라진다. 리다이렉션을 앞으로 뺀다(`>> file echo ...`).
+
 ## verify_coords — 좌표계 판정 (D0)
 
 인허가 좌표의 원본 좌표계를 앵커 대조로 판정한다. 어느 EPSG인지 파일에 적혀 있지 않고,

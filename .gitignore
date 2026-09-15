@@ -36,3 +36,6 @@ server/.gradle/
 
 # 프론트 빌드 결과 — web/ 이 소스이고 Docker 가 빌드한다
 server/src/main/resources/static/
+
+# 적재 로그 — DB 의 ingest_run 이 기록의 원본이다
+etl/out/logs/

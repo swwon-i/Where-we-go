@@ -71,6 +71,9 @@ FILE_RULES = [
 #: CSV → poi_raw COPY 청크 크기
 CHUNK_ROWS = 50_000
 
+#: DB 에 닿지 못해 적재를 시작조차 못한 경우. 스케줄러가 '실패'와 구분할 수 있게 별도 코드를 준다.
+EXIT_DB_UNAVAILABLE = 3
+
 #: 서울을 넉넉히 감싸는 사각형(5186). **실제 행정경계가 아니다.**
 #: 검수 규칙이 아니라 좌표 변환이 깨졌는지 보는 계기판이며, 개별 건수가 아니라 자릿수를 본다.
 SEOUL_5186_BOUNDS = (170_000.0, 520_000.0, 230_000.0, 580_000.0)
@@ -588,6 +591,17 @@ def main(argv: list[str] | None = None) -> int:
     targets = list(SOURCES.values()) if args.source == "all" else [SOURCES[args.source]]
     if args.snapshot:
         targets = [replace(targets[0], path=Path(args.snapshot))]
+
+    # DB 가 꺼져 있으면 회차를 만들지 않고 물러난다.
+    # 매일 도는 작업이라, 도커를 안 켠 날마다 FAILED 회차가 쌓이면
+    # /admin/ingest-runs 표가 '파이프라인이 자주 깨진다'처럼 읽힌다.
+    # 적재를 시도하다 깨진 것과 아예 시작하지 못한 것은 다른 사건이다.
+    try:
+        connect().close()
+    except Exception as e:  # noqa: BLE001 — 접속 실패 원인을 그대로 보여준다
+        print(f"DB 에 접속하지 못했다: {e}", file=sys.stderr)
+        print("  docker compose up -d db 로 띄웠는지 확인할 것", file=sys.stderr)
+        return EXIT_DB_UNAVAILABLE
 
     with connect() as conn:
         for source in targets:
