@@ -39,3 +39,6 @@ server/src/main/resources/static/
 
 # 적재 로그 — DB 의 ingest_run 이 기록의 원본이다
 etl/out/logs/
+
+# 산출 결과 — 스크립트로 언제든 다시 만든다
+etl/out/subway/
