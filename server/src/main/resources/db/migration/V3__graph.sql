@@ -159,10 +159,15 @@ CREATE TABLE graph_edge (
     --   WALK      보행 ↔ 보행        거리 ÷ 도보속도
     --   ACCESS    보행 ↔ 정류장       진출입 도보
     --   BOARD     정류장 → 플랫폼     대기 = 배차 ÷ 2
+    --   ALIGHT    플랫폼 → 정류장     0초
     --   RIDE      플랫폼 → 플랫폼     역간 소요시간
     --   TRANSFER  플랫폼 ↔ 플랫폼     환승 도보 + 대기
+    --
+    -- BOARD 를 양방향으로 쓰지 않고 ALIGHT 를 따로 둔 것은 비용이 다르기 때문이다.
+    -- 타는 데는 대기가 들고 내리는 데는 들지 않는다. 같은 이름이면 경로 상세가
+    -- "승차 180초 / 승차 0초" 로 읽혀 뜻이 흐려진다.
     kind            TEXT NOT NULL
-                    CHECK (kind IN ('WALK', 'ACCESS', 'BOARD', 'RIDE', 'TRANSFER')),
+                    CHECK (kind IN ('WALK', 'ACCESS', 'BOARD', 'ALIGHT', 'RIDE', 'TRANSFER')),
 
     -- 기본 가중치(초). 시간대와 무관한 엣지는 이 값만 쓴다.
     weight_sec      INTEGER NOT NULL CHECK (weight_sec >= 0),
