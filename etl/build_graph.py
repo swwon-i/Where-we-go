@@ -936,11 +936,6 @@ def main(argv: list[str] | None = None) -> int:
             }, int((time.monotonic() - t0) * 1000))
             conn.commit()
 
-            dropped = prune_old_builds(conn, build_id)
-            conn.commit()
-            if dropped:
-                print(f"  이전 빌드 {dropped}개 정리", flush=True)
-
         except Exception as e:  # noqa: BLE001 — 실패해도 회차는 남긴다
             conn.rollback()
             with conn.cursor() as cur:
@@ -951,6 +946,19 @@ def main(argv: list[str] | None = None) -> int:
             conn.commit()
             print(f"  → FAILED: {e}", file=sys.stderr)
             raise
+
+        # 정리는 빌드가 끝난 **뒤**의 일이다. 여기서 실패해도 방금 만든 그래프는 멀쩡하므로
+        # FAILED 로 표시하지 않는다 — 실제로 오래된 빌드를 지우다 막혀 완성된 빌드가
+        # FAILED + is_active 라는 모순된 상태로 남은 적이 있다.
+        # 못 지운 빌드는 디스크만 더 쓸 뿐 다음 빌드가 다시 지운다.
+        try:
+            dropped = prune_old_builds(conn, build_id)
+            conn.commit()
+            if dropped:
+                print(f"  이전 빌드 {dropped}개 정리", flush=True)
+        except Exception as e:  # noqa: BLE001
+            conn.rollback()
+            print(f"  ⚠ 이전 빌드 정리 실패 (그래프는 정상): {e}", file=sys.stderr)
 
         with conn.cursor() as cur:
             cur.execute(
