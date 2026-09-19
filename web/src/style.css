@@ -1,57 +1,160 @@
 :root {
   --bg: #ffffff; --fg: #16181d; --muted: #6b7280;
   --line: #e5e7eb; --accent: #2563eb; --panel: #f9fafb;
+  --bad: #e11d48; --ok: #059669;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #101216; --fg: #e8eaed; --muted: #9aa1ab;
     --line: #262b33; --accent: #60a5fa; --panel: #171a20;
+    --bad: #fb7185; --ok: #34d399;
   }
 }
 
 * { box-sizing: border-box; }
+
+/* display 를 지정한 요소에는 hidden 속성이 먹지 않는다. flex/grid 를 쓰는 폼과 패널이
+   전부 여기 해당하므로 한 줄로 못박는다. */
+[hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
 body {
   display: flex; flex-direction: column;
   font: 14px/1.5 -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
   background: var(--bg); color: var(--fg);
 }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
 
+/* ── 상단 ─────────────────────────────────────────────────────────────── */
 header {
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+  display: flex; align-items: center; gap: 18px;
+  padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
 }
-h1 { font-size: 15px; margin: 0; letter-spacing: -0.2px; }
-h1 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+.brand { font-weight: 700; letter-spacing: -0.3px; color: var(--fg); }
+.brand:hover { text-decoration: none; color: var(--accent); }
+header nav { display: flex; gap: 14px; }
+#who { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+#who .nick { font-weight: 600; }
 
-input, select, button {
-  font: inherit; padding: 6px 10px;
+main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* ── 공통 ─────────────────────────────────────────────────────────────── */
+input, select, button, textarea {
+  font: inherit; padding: 7px 10px;
   border: 1px solid var(--line); border-radius: 6px;
   background: var(--bg); color: var(--fg);
 }
-input[type=search] { width: 200px; }
-button { cursor: pointer; border-color: var(--accent); color: var(--accent); }
-button:hover { background: var(--accent); color: #fff; }
-#stat { color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button { cursor: pointer; }
+button.primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+button.primary:hover:not(:disabled) { background: var(--accent); color: #fff; }
+button:disabled { opacity: .55; cursor: default; }
+button.link {
+  border: 0; background: none; color: var(--accent); padding: 2px 4px; font-size: 13px;
+}
+button.link:hover { text-decoration: underline; }
 
-main { flex: 1; display: flex; min-height: 0; }
-#map { flex: 1; min-width: 0; }
-#list { width: 320px; border-left: 1px solid var(--line); overflow-y: auto; background: var(--panel); }
-
-.row { padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
-.row:hover { background: var(--bg); }
-.row b { font-weight: 600; }
-.row .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.meta { color: var(--muted); font-size: 12px; }
+.muted { color: var(--muted); }
+.warn { color: var(--bad); }
+.ok { color: var(--ok); }
 .dist { float: right; color: var(--accent); font-variant-numeric: tabular-nums; }
+.tag {
+  font-size: 11px; padding: 1px 6px; border-radius: 10px;
+  background: var(--accent); color: #fff; vertical-align: 1px;
+}
+.snap { color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .notice {
   padding: 14px 16px; margin: 16px; border: 1px solid var(--line);
-  border-radius: 8px; background: var(--panel); color: var(--muted);
+  border-radius: 8px; background: var(--panel); color: var(--muted); font-size: 13px;
 }
+.notice.bad { border-color: var(--bad); color: var(--bad); }
 .notice code { color: var(--fg); }
 
-@media (max-width: 760px) {
-  main { flex-direction: column; }
-  #map { height: 55vh; flex: none; }
-  #list { width: auto; border-left: 0; border-top: 1px solid var(--line); }
+/* ── 폼 ───────────────────────────────────────────────────────────────── */
+.form { display: flex; flex-direction: column; gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field span { font-size: 12px; color: var(--muted); }
+.field-error, .form-error { color: var(--bad); font-size: 12px; font-style: normal; }
+.form-error {
+  padding: 8px 10px; border: 1px solid var(--bad); border-radius: 6px;
+}
+.hint { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+/* .form 과 함께 쓰이면 그쪽의 column 이 남는다. 방향을 명시한다. */
+.row-form { display: flex; flex-direction: row; gap: 8px; flex-wrap: wrap; align-items: flex-start; }
+.row-form input[type=text], .row-form input[type=search] { flex: 1; min-width: 160px; }
+
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+.tab {
+  border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+  background: none; color: var(--muted); padding: 8px 12px;
+}
+.tab.is-on { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+
+/* ── 가운데 카드 (로그인) ────────────────────────────────────────────── */
+.center-card {
+  width: min(380px, 92vw); margin: 8vh auto; padding: 24px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+}
+.center-card h2 { margin: 0 0 4px; font-size: 20px; letter-spacing: -0.4px; }
+.center-card .sub { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
+.center-card .tabs { margin-bottom: 16px; }
+.center-card .foot { margin: 18px 0 0; text-align: center; font-size: 13px; }
+
+/* ── 방 목록 ──────────────────────────────────────────────────────────── */
+.page { width: min(720px, 94vw); margin: 24px auto; display: grid; gap: 20px; }
+.panel {
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); padding: 18px;
+}
+.panel h2 { margin: 0 0 12px; font-size: 15px; }
+.room-row {
+  display: block; padding: 12px 14px; border: 1px solid var(--line);
+  border-radius: 8px; margin-bottom: 8px; background: var(--bg); color: var(--fg);
+}
+.room-row:hover { border-color: var(--accent); text-decoration: none; }
+.room-row b { display: block; }
+.room-row .meta { display: block; margin-top: 2px; }
+
+/* ── 방 / 둘러보기 ────────────────────────────────────────────────────── */
+.room, .explore { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.room-head, .bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+}
+.room-head h2 { margin: 0; font-size: 16px; letter-spacing: -0.3px; }
+.badge {
+  margin-left: auto; font-size: 12px; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 20px; padding: 3px 10px;
+}
+.badge.ready { color: var(--ok); border-color: var(--ok); }
+
+.room-body { flex: 1; display: flex; min-height: 0; }
+.map { flex: 1; min-width: 0; }
+.side {
+  width: 340px; border-left: 1px solid var(--line); background: var(--panel);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.panel-body { overflow-y: auto; padding: 12px 14px; flex: 1; }
+
+.list { list-style: none; margin: 0 0 12px; padding: 0; }
+.list li { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.list li.mine b { color: var(--accent); }
+.list li.clickable { cursor: pointer; padding-left: 6px; margin-left: -6px; border-radius: 6px; }
+.list li.clickable:hover { background: var(--bg); }
+.list li.added { opacity: .5; }
+.list li.added b::after { content: ' ✓ 담음'; color: var(--ok); font-weight: 400; font-size: 12px; }
+.list li.failed b::after { content: ' 담지 못함'; color: var(--bad); font-weight: 400; font-size: 12px; }
+.list .del { float: right; }
+
+.origin-box { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 4px; }
+.origin-box h3 { margin: 0 0 8px; font-size: 13px; color: var(--muted); font-weight: 600; }
+
+.pin-label { padding: 5px 9px; font-size: 12px; white-space: nowrap; color: #16181d; }
+
+@media (max-width: 800px) {
+  .room-body { flex-direction: column; }
+  .map { height: 45vh; flex: none; }
+  .side { width: auto; border-left: 0; border-top: 1px solid var(--line); }
 }
