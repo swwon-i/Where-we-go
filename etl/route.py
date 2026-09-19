@@ -15,7 +15,7 @@ import argparse
 import heapq
 import sys
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from etl.db import connect
 
@@ -28,11 +28,16 @@ class Leg:
     """경로를 사람이 읽는 단위로 묶은 것. 같은 노선을 연속으로 타면 한 구간이다."""
 
     kind: str          # WALK / SUBWAY / BUS
-    line: str | None
+    line: str | None   # 식별자. 버스는 '100100017' 이라 그대로 보여주면 안 된다
     seconds: int
     stops: int         # 정차 수 (탈것만)
     distance_m: float  # 도보만
     to_name: str | None
+    line_name: str | None = None   # 표시용. 없으면 `line` 으로 떨어진다
+
+    @property
+    def label(self) -> str | None:
+        return self.line_name or self.line
 
 
 @dataclass
@@ -51,7 +56,7 @@ class Route:
         return sum(l.distance_m for l in self.legs if l.kind == "WALK")
 
     def summary(self) -> str:
-        lines = [l.line for l in self.legs if l.kind in ("SUBWAY", "BUS") and l.line]
+        lines = [l.label for l in self.legs if l.kind in ("SUBWAY", "BUS") and l.label]
         route = " → ".join(lines) if lines else "도보"
         return (f"{self.total_sec // 60}분 {self.total_sec % 60}초 · "
                 f"환승 {self.transfers} · 도보 {self.walk_distance_m:.0f}m · {route}")
@@ -60,11 +65,12 @@ class Route:
 class Graph:
     """메모리에 올린 그래프. 탐색은 전부 여기서 한다 — DB 는 보관용이다."""
 
-    def __init__(self, adj, node_meta, stop_index, build_id):
+    def __init__(self, adj, node_meta, stop_index, build_id, route_names=None):
         self.adj = adj
         self.meta = node_meta            # node_id -> (kind, mode, line, name)
         self.stop_index = stop_index     # (mode, 이름) -> STOP node_id
         self.build_id = build_id
+        self.route_names = route_names or {}   # (mode, line) -> 표시 이름
 
     @classmethod
     def load(cls, conn, build_id: int | None = None) -> "Graph":
@@ -101,7 +107,11 @@ class Graph:
                 if kind == "STOP":
                     index[(mode, name)] = nid
 
-        return cls(adj, meta, index, build_id)
+            # 노선 이름표. 탐색에는 안 쓰이고 결과를 읽을 때만 쓴다.
+            cur.execute("SELECT mode, source_id, name FROM transit_route")
+            names = {(m, sid): nm for m, sid, nm in cur.fetchall()}
+
+        return cls(adj, meta, index, build_id, names)
 
     def stop(self, name: str, mode: str = "SUBWAY") -> int:
         nid = self.stop_index.get((mode, name))
@@ -221,7 +231,13 @@ def build_route(graph: Graph, prev, dist, dst: int) -> Route | None:
         else:
             merged.append(leg)
 
-    return Route(dist[dst], merged)
+    # 식별자는 그대로 두고 표시용 이름만 얹는다 — 노선을 구분하는 키는 여전히 `line` 이다.
+    named = [
+        leg if leg.line is None else
+        replace(leg, line_name=graph.route_names.get((leg.kind, leg.line)))
+        for leg in merged
+    ]
+    return Route(dist[dst], named)
 
 
 def route_between(graph: Graph, src: int, dst: int, hour: int | None = None) -> Route | None:
@@ -271,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  도보     {leg.seconds:>4}초  {leg.distance_m:>5.0f}m")
         else:
             label = "지하철" if leg.kind == "SUBWAY" else "버스  "
-            print(f"  {label}  {leg.seconds:>4}초  {leg.line or '':<10} "
+            print(f"  {label}  {leg.seconds:>4}초  {leg.label or '':<10} "
                   f"{leg.stops}정차 → {leg.to_name or ''}")
     return 0
 

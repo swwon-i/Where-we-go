@@ -10,7 +10,7 @@ import pytest
 from etl.route import Graph, Route, Leg, build_route, dijkstra, route_between
 
 
-def make_graph(edges, meta=None):
+def make_graph(edges, meta=None, route_names=None):
     """`edges` 는 `(from, to, weight, kind, line)` 또는 시간대 배열을 포함한 6튜플."""
     from collections import defaultdict
 
@@ -22,7 +22,7 @@ def make_graph(edges, meta=None):
         else:
             f, t, w, by_hour, kind, line = e
         adj[f].append((t, w, by_hour, kind, line))
-    return Graph(adj, meta or {}, {}, build_id=0)
+    return Graph(adj, meta or {}, {}, build_id=0, route_names=route_names)
 
 
 class TestDijkstra:
@@ -164,6 +164,45 @@ class TestBuildRoute:
         kinds = [l.kind for l in route.legs]
         assert "SUBWAY" in kinds and "BUS" in kinds and "WALK" in kinds
         assert route.transfers == 1
+
+
+class TestRouteNames:
+    """버스 `line` 은 '100100017' 같은 식별자라 그대로 보여주면 읽을 수 없다.
+    이름은 얹되 **식별자는 그대로 둔다** — 노선을 가르는 키가 `line` 이기 때문이다."""
+
+    META = {
+        30: ("STOP", "BUS", None, "북한산"),
+        31: ("PLATFORM", "BUS", "100100017", "북한산"),
+        32: ("PLATFORM", "BUS", "100100017", "수유역"),
+        33: ("STOP", "BUS", None, "수유역"),
+    }
+    EDGES = [
+        (30, 31, 200, "BOARD", "100100017"),
+        (31, 32, 600, "RIDE", "100100017"),
+        (32, 33, 1, "ALIGHT", "100100017"),
+    ]
+
+    def route(self, names):
+        g = make_graph(self.EDGES, self.META, names)
+        dist, prev, _ = dijkstra(g, 30, {33})
+        return build_route(g, prev, dist, 33)
+
+    def test_display_name_replaces_id_in_summary(self):
+        route = self.route({("BUS", "100100017"): "120"})
+        assert "120" in route.summary()
+        assert "100100017" not in route.summary()
+
+    def test_identity_is_preserved(self):
+        """표시 이름이 붙어도 `line` 은 식별자 그대로여야 한다."""
+        leg = [l for l in self.route({("BUS", "100100017"): "120"}).legs
+               if l.kind == "BUS"][0]
+        assert leg.line == "100100017"
+        assert leg.line_name == "120"
+
+    def test_falls_back_to_id_when_name_missing(self):
+        """이름표가 없는 노선도 경로는 나와야 한다 — 표시만 식별자로 떨어진다."""
+        leg = [l for l in self.route({}).legs if l.kind == "BUS"][0]
+        assert leg.label == "100100017"
 
 
 class TestRouteSummary:

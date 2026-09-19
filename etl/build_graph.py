@@ -249,7 +249,9 @@ def truncate_all(conn) -> None:
     TRUNCATE 는 테이블 파일을 버리는 것이라 1초도 걸리지 않는다.
     """
     with conn.cursor() as cur:
-        cur.execute("TRUNCATE graph_edge, graph_node, graph_build, transit_stop CASCADE")
+        cur.execute(
+            "TRUNCATE graph_edge, graph_node, graph_build, transit_stop, transit_route CASCADE"
+        )
 
 
 def prune_old_builds(conn, keep_id: int) -> int:
@@ -507,7 +509,17 @@ def insert_transfer_edges(
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def load_bus_sections(section_path, route_path, weektag: str) -> pd.DataFrame:
+def load_bus_routes(route_path) -> pd.DataFrame:
+    """노선마스터. 그래프에 넣을 서울 노선만 남긴다.
+
+    `노선_ID` 는 구간·배차 데이터가 쓰는 식별자이고 `노선_명칭` 이 사람이 읽는 이름이다.
+    둘을 잇는 곳은 여기뿐이라, 이 표가 없으면 경로 결과가 노선 ID 로 나온다.
+    """
+    routes = pd.read_csv(route_path, encoding="cp949", dtype=str)
+    return routes[~routes["노선_유형"].isin(BUS_EXCLUDED_TYPES)].reset_index(drop=True)
+
+
+def load_bus_sections(section_path, routes: pd.DataFrame, weektag: str) -> pd.DataFrame:
     """서울 버스 구간과 시간대별 운행시간.
 
     구간 데이터는 하루치씩 7일이 들어 있다. 요일 구분에 맞는 날짜만 고른다 —
@@ -524,9 +536,40 @@ def load_bus_sections(section_path, route_path, weektag: str) -> pd.DataFrame:
     picked = [d for d in dates if weekday[d] in want]
     sec = sec[sec["기준_날짜"] == picked[0]]
 
-    routes = pd.read_csv(route_path, encoding="cp949", dtype=str)
-    seoul = set(routes[~routes["노선_유형"].isin(BUS_EXCLUDED_TYPES)]["노선_ID"])
+    seoul = set(routes["노선_ID"])
     return sec[sec["노선_ID"].isin(seoul)].reset_index(drop=True)
+
+
+def insert_transit_routes(conn, bus_routes: pd.DataFrame | None, subway_lines) -> int:
+    """`transit_route` 를 채운다. 탐색에는 쓰이지 않고 결과를 읽을 때만 쓴다.
+
+    지하철 노선도 함께 넣어 두 수단을 같은 방법으로 표시할 수 있게 한다 —
+    `line` 이 '2' 라 그냥 읽히더라도, 읽는 쪽이 수단마다 다르게 굴면 안 된다.
+    """
+    rows = [
+        ("SUBWAY", str(l), f"{l}호선" if str(l).isdigit() else str(l), None)
+        for l in sorted(subway_lines)
+    ]
+    if bus_routes is not None:
+        rows += [
+            ("BUS", r.노선_ID, r.노선_명칭, r.노선_유형)
+            for r in bus_routes.itertuples()
+        ]
+    with conn.cursor() as cur:
+        cur.execute(
+            "CREATE TEMP TABLE _route (mode text, source_id text, name text, "
+            "route_type text) ON COMMIT DROP"
+        )
+        copy_rows(cur, "_route", ["mode", "source_id", "name", "route_type"], rows)
+        cur.execute(
+            """
+            INSERT INTO transit_route (mode, source_id, name, route_type)
+            SELECT mode, source_id, name, route_type FROM _route
+            ON CONFLICT (mode, source_id) DO UPDATE
+                SET name = EXCLUDED.name, route_type = EXCLUDED.route_type
+            """
+        )
+    return len(rows)
 
 
 def load_bus_headways(headway_path, route_id_path, weektag: str) -> dict[str, int]:
@@ -852,9 +895,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"  RIDE {er:,} · BOARD {eb:,} · ALIGHT {ealight:,} · TRANSFER {et:,}", flush=True)
 
+            bus_routes = None
             if not args.no_bus:
                 print("  버스 적재 중…", flush=True)
-                sections = load_bus_sections(args.bus_sections, args.bus_routes, args.weektag)
+                bus_routes = load_bus_routes(args.bus_routes)
+                sections = load_bus_sections(args.bus_sections, bus_routes, args.weektag)
                 bus_headways = load_bus_headways(
                     args.bus_headways, args.bus_route_ids, args.weektag
                 )
@@ -866,6 +911,9 @@ def main(argv: list[str] | None = None) -> int:
                 er += bs["ride"]
                 eb += bs["board"]
                 ealight += bs["alight"]
+
+            n_routes = insert_transit_routes(conn, bus_routes, set(stations["line"]))
+            print(f"  transit_route {n_routes:,}", flush=True)
 
             # 버스 정류장까지 만든 뒤에 스냅한다 — 역과 정류장을 한 번에 붙인다.
             print("  ACCESS 스냅 중…", flush=True)

@@ -126,6 +126,24 @@ class TestBus:
         assert {"RIDE", "BOARD", "ALIGHT", "ACCESS", "WALK", "TRANSFER"} <= kinds
 
 
+class TestRouteNames:
+    """`transit_route` 가 채워져 있는지. 없으면 경로가 노선 ID 로 표시된다."""
+
+    def test_every_bus_line_has_a_name(self, graph):
+        lines = {
+            line
+            for edges in graph.adj.values()
+            for _, _, _, kind, line in edges
+            if kind == "RIDE" and line and line.isdigit() and len(line) >= 7
+        }
+        assert lines, "버스 RIDE 엣지가 없다"
+        missing = {l for l in lines if ("BUS", l) not in graph.route_names}
+        assert not missing, f"이름표 없는 버스 노선 {len(missing)}개: {sorted(missing)[:5]}"
+
+    def test_subway_lines_have_names(self, graph):
+        assert graph.route_names.get(("SUBWAY", "2")) == "2호선"
+
+
 class TestDepartureHour:
     """시간대별 가중치가 실제로 결과를 바꾸는지 — 이것이 없으면 departureHour 가 무의미하다."""
 
