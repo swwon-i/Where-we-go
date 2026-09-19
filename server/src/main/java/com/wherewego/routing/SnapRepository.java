@@ -31,6 +31,27 @@ public class SnapRepository {
     public record Snapped(long nodeId, double distanceM) {}
 
     /**
+     * 노드의 좌표(4326). 역 이름으로 출발지를 정할 때 그 역이 어디인지 알아야 한다.
+     *
+     * <p>좌표를 메모리 그래프에 같이 올리지 않은 것은 탐색이 좌표를 쓰지 않기 때문이다.
+     * 21만 개 × 16바이트를 늘 들고 있을 이유가, 가끔 한 건 조회하자고 생기지 않는다.
+     */
+    public double[] coordinateOf(long nodeId) {
+        var rows = jdbc.query(
+                """
+                SELECT ST_X(ST_Transform(geom, 4326)) AS lng,
+                       ST_Y(ST_Transform(geom, 4326)) AS lat
+                FROM graph_node WHERE id = :id
+                """,
+                new MapSqlParameterSource("id", nodeId),
+                (rs, i) -> new double[] {rs.getDouble("lng"), rs.getDouble("lat")});
+        if (rows.isEmpty()) {
+            throw new IllegalStateException("없는 노드: " + nodeId);
+        }
+        return rows.getFirst();
+    }
+
+    /**
      * 가장 가까운 보행 노드. 없으면 null.
      *
      * <p>{@code <->} 연산자가 GiST 인덱스를 타고 거리순으로 바로 꺼낸다. {@code ST_DWithin} 은

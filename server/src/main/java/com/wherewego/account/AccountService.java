@@ -1,6 +1,7 @@
 package com.wherewego.account;
 
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
@@ -67,6 +68,24 @@ public class AccountService implements UserDetailsService {
             // 어느 칸인지 다시 따지지 않는다 — 둘 중 하나이고, 재시도하면 위에서 걸린다.
             throw new DuplicateException("loginId", "이미 쓰이는 아이디나 닉네임입니다");
         }
+    }
+
+    /**
+     * 다른 패키지에 넘기는 계정 표현.
+     *
+     * <p>{@link AppUser} 를 그대로 내보내지 않는다. 해시가 딸려 있어 어딘가에서 직렬화되면
+     * 그대로 새어 나간다 — 타입이 애초에 그 값을 갖지 않게 하는 편이 규칙으로 막는 것보다 낫다.
+     */
+    public record UserRef(long id, String nickname) {}
+
+    /** 지금 로그인한 사용자. 로그인하지 않았으면 예외 — 보안 설정이 이미 걸러 준다. */
+    public UserRef currentUser() {
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !auth.isAuthenticated()) {
+            throw new UsernameNotFoundException("로그인이 필요합니다");
+        }
+        var user = byLoginId(auth.getName());
+        return new UserRef(user.id(), user.nickname());
     }
 
     AppUser byLoginId(String loginId) {

@@ -45,6 +45,11 @@ public class RouteService {
         return new Endpoint(node, snapped.distanceM(), "%.5f,%.5f".formatted(lng, lat));
     }
 
+    /** 노드의 좌표(4326). {@code [lng, lat]}. */
+    public double[] coordinateOf(long graphNodeId) {
+        return snaps.coordinateOf(graphNodeId);
+    }
+
     /** 역·정류장 이름으로 찾는다. */
     public Endpoint atStop(TransitGraph graph, TransitMode mode, String name) {
         int node = graph.findStop(mode, name);

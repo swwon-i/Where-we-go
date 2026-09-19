@@ -143,8 +143,7 @@ public class AccountController {
     }
 
     private long currentUserId() {
-        var auth = SecurityContextHolder.getContext().getAuthentication();
-        return accounts.byLoginId(auth.getName()).id();
+        return accounts.currentUser().id();
     }
 
     /** 아이디나 비밀번호가 틀렸다. 어느 쪽인지는 말하지 않는다. */
