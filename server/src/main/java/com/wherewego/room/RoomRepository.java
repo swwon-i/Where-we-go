@@ -3,6 +3,7 @@ package com.wherewego.room;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -25,50 +26,77 @@ public class RoomRepository {
 
     // ── 방 ──────────────────────────────────────────────────────────────────
 
-    public record RoomRow(UUID id, String title, long ownerId, String ownerNickname,
+    public record RoomRow(
+            UUID id,
+            String title,
+            long ownerId,
+            String ownerNickname,
+            String inviteCode,
             java.time.Instant createdAt) {}
 
-    UUID createRoom(String title, long ownerId) {
+    private static final String ROOM_COLUMNS =
+            """
+            SELECT r.id, r.title, r.owner_id, u.nickname, r.invite_code, r.created_at
+            FROM room r JOIN app_user u ON u.id = r.owner_id
+            """;
+
+    private static final RowMapper<RoomRow> ROOM_MAPPER = (rs, i) -> new RoomRow(
+            rs.getObject("id", UUID.class),
+            rs.getString("title"),
+            rs.getLong("owner_id"),
+            rs.getString("nickname"),
+            rs.getString("invite_code"),
+            rs.getTimestamp("created_at").toInstant());
+
+    private Optional<RoomRow> one(String where, Object key) {
+        var rows = jdbc.query(
+                ROOM_COLUMNS + where, new MapSqlParameterSource("key", key), ROOM_MAPPER);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.getFirst());
+    }
+
+    /**
+     * @throws org.springframework.dao.DuplicateKeyException 초대 코드가 겹쳤을 때.
+     *     32^8 중 하나라 사실상 일어나지 않지만, 일어났을 때 조용히 틀리는 것보다 터지는 편이 낫다.
+     *     부르는 쪽이 다시 뽑아 재시도한다
+     */
+    UUID createRoom(String title, long ownerId, String inviteCode) {
         return jdbc.queryForObject(
-                "INSERT INTO room (title, owner_id) VALUES (:title, :owner) RETURNING id",
-                new MapSqlParameterSource().addValue("title", title).addValue("owner", ownerId),
+                """
+                INSERT INTO room (title, owner_id, invite_code)
+                VALUES (:title, :owner, :code) RETURNING id
+                """,
+                new MapSqlParameterSource()
+                        .addValue("title", title)
+                        .addValue("owner", ownerId)
+                        .addValue("code", inviteCode),
                 UUID.class);
     }
 
     Optional<RoomRow> findRoom(UUID roomId) {
-        var rows = jdbc.query(
-                """
-                SELECT r.id, r.title, r.owner_id, u.nickname, r.created_at
-                FROM room r JOIN app_user u ON u.id = r.owner_id
-                WHERE r.id = :id
-                """,
-                new MapSqlParameterSource("id", roomId),
-                (rs, i) -> new RoomRow(
-                        rs.getObject("id", UUID.class),
-                        rs.getString("title"),
-                        rs.getLong("owner_id"),
-                        rs.getString("nickname"),
-                        rs.getTimestamp("created_at").toInstant()));
-        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.getFirst());
+        return one("WHERE r.id = :key", roomId);
+    }
+
+    /** 코드로 방을 찾는다. 이미 정규화된(대문자·하이픈 없는) 코드가 들어온다. */
+    Optional<RoomRow> findByCode(String inviteCode) {
+        return one("WHERE r.invite_code = :key", inviteCode);
+    }
+
+    int updateCode(UUID roomId, String inviteCode) {
+        return jdbc.update(
+                "UPDATE room SET invite_code = :code WHERE id = :id",
+                new MapSqlParameterSource().addValue("id", roomId).addValue("code", inviteCode));
     }
 
     /** 내가 참가한 방들. 최근 만든 것부터. */
     List<RoomRow> roomsOf(long userId) {
         return jdbc.query(
-                """
-                SELECT r.id, r.title, r.owner_id, u.nickname, r.created_at
-                FROM room r
-                JOIN app_user u ON u.id = r.owner_id
-                JOIN room_member m ON m.room_id = r.id AND m.user_id = :uid
-                ORDER BY r.created_at DESC
-                """,
-                new MapSqlParameterSource("uid", userId),
-                (rs, i) -> new RoomRow(
-                        rs.getObject("id", UUID.class),
-                        rs.getString("title"),
-                        rs.getLong("owner_id"),
-                        rs.getString("nickname"),
-                        rs.getTimestamp("created_at").toInstant()));
+                ROOM_COLUMNS
+                        + """
+                        JOIN room_member m ON m.room_id = r.id AND m.user_id = :key
+                        ORDER BY r.created_at DESC
+                        """,
+                new MapSqlParameterSource("key", userId),
+                ROOM_MAPPER);
     }
 
     // ── 참가자 ──────────────────────────────────────────────────────────────

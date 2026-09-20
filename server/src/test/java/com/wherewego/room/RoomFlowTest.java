@@ -172,6 +172,118 @@ class RoomFlowTest {
         }
     }
 
+    // ── 초대 코드 ───────────────────────────────────────────────────────────
+
+    @Nested
+    class InviteCodes {
+
+        private String codeOf(MockHttpSession session, String roomId) throws Exception {
+            var body = mvc.perform(get("/api/v1/rooms/" + roomId).session(session))
+                    .andReturn().getResponse().getContentAsString();
+            return json.readTree(body).get("inviteCode").asString();
+        }
+
+        private org.springframework.test.web.servlet.ResultActions joinWith(
+                MockHttpSession session, String code) throws Exception {
+            return mvc.perform(json(post("/api/v1/rooms/join"), session,
+                    "{\"code\":\"%s\"}".formatted(code)));
+        }
+
+        @Test
+        @DisplayName("방을 만들면 초대 코드가 함께 나온다")
+        void createReturnsCode() throws Exception {
+            var body = mvc.perform(
+                            json(post("/api/v1/rooms"), owner, "{\"title\":\"코드 방\"}"))
+                    .andExpect(status().isCreated())
+                    .andReturn().getResponse().getContentAsString();
+
+            assertThat(json.readTree(body).get("inviteCode").asString())
+                    .matches("[0-9A-HJKMNP-TV-Z]{8}");
+        }
+
+        @Test
+        @DisplayName("코드로 참가할 수 있다 — 링크를 복사하지 않아도 된다")
+        void joinByCode() throws Exception {
+            var roomId = createRoom(owner);
+            joinWith(guest, codeOf(owner, roomId))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.roomId").value(roomId))
+                    .andExpect(jsonPath("$.members.length()").value(2));
+        }
+
+        @Test
+        @DisplayName("받아 적은 대로 쳐도 들어간다 — 하이픈·소문자·헷갈린 글자")
+        void joinToleratesTypedForms() throws Exception {
+            var roomId = createRoom(owner);
+            String code = codeOf(owner, roomId);
+
+            // 화면이 보여주는 XXXX-XXXX 를 그대로 다시 친 경우
+            String typed = code.substring(0, 4) + "-" + code.substring(4);
+            joinWith(guest, typed.toLowerCase()).andExpect(status().isOk());
+        }
+
+        @Test
+        @DisplayName("없는 코드와 형식이 틀린 코드를 똑같이 404 로 답한다")
+        void unknownAndMalformedLookTheSame() throws Exception {
+            String missing = joinWith(guest, "ZZZZZZZZ")
+                    .andExpect(status().isNotFound())
+                    .andReturn().getResponse().getContentAsString();
+            String malformed = joinWith(guest, "짧음")
+                    .andExpect(status().isNotFound())
+                    .andReturn().getResponse().getContentAsString();
+
+            // 형식만 맞으면 "없는 코드"라고 알려주는 것은 찍어 보는 쪽에 범위를 좁혀 주는 일이다.
+            assertThat(missing).isEqualTo(malformed);
+        }
+
+        @Test
+        @DisplayName("방장은 코드를 새로 뽑을 수 있고, 옛 코드는 더 이상 통하지 않는다")
+        void ownerCanRegenerate() throws Exception {
+            var roomId = createRoom(owner);
+            String before = codeOf(owner, roomId);
+
+            var body = mvc.perform(post("/api/v1/rooms/" + roomId + "/code")
+                            .session(owner).with(csrf()))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString();
+            String after = json.readTree(body).get("inviteCode").asString();
+
+            assertThat(after).isNotEqualTo(before);
+            joinWith(guest, before).andExpect(status().isNotFound());
+            joinWith(guest, after).andExpect(status().isOk());
+        }
+
+        @Test
+        @DisplayName("방장이 아니면 코드를 바꿀 수 없다")
+        void othersCannotRegenerate() throws Exception {
+            var roomId = createRoom(owner);
+            join(guest, roomId);
+
+            mvc.perform(post("/api/v1/rooms/" + roomId + "/code").session(guest).with(csrf()))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("코드는 참가자에게만 보인다 — 밖에서 읽히면 코드의 뜻이 없어진다")
+        void codeIsNotVisibleToOutsiders() throws Exception {
+            var roomId = createRoom(owner);
+            mvc.perform(get("/api/v1/rooms/" + roomId).session(guest))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("코드로 두 번 들어가도 참가자가 늘지 않는다")
+        void joiningTwiceByCodeIsIdempotent() throws Exception {
+            var roomId = createRoom(owner);
+            String code = codeOf(owner, roomId);
+
+            joinWith(guest, code).andExpect(status().isOk());
+            joinWith(guest, code)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.members.length()").value(2));
+        }
+    }
+
     // ── 출발지 ──────────────────────────────────────────────────────────────
 
     @Nested

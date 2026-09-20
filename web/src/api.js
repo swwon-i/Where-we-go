@@ -111,6 +111,8 @@ export const api = {
   createRoom: (title) => request('POST', '/rooms', { title }),
   room: (roomId) => request('GET', `/rooms/${roomId}`),
   joinRoom: (roomId) => request('POST', `/rooms/${roomId}/members`),
+  joinByCode: (code) => request('POST', '/rooms/join', { code }),
+  regenerateCode: (roomId) => request('POST', `/rooms/${roomId}/code`),
   setOrigin: (roomId, origin) =>
     request('PUT', `/rooms/${roomId}/members/me/origin`, origin),
   addBookmark: (roomId, bookmark) => request('POST', `/rooms/${roomId}/bookmarks`, bookmark),

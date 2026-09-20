@@ -5,7 +5,9 @@ import com.wherewego.graph.GraphCache;
 import com.wherewego.graph.TransitMode;
 import com.wherewego.routing.RouteService;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -50,13 +52,65 @@ public class RoomService {
         }
     }
 
+    /** 초대 코드가 겹쳤을 때 다시 뽑는 횟수. 32^8 중 하나라 한 번도 안 돌 것이다. */
+    private static final int CODE_ATTEMPTS = 5;
+
     @Transactional
     public UUID create(String title) {
         var me = accounts.currentUser();
-        var roomId = repository.createRoom(title.strip(), me.id());
+        var roomId = withFreshCode(code -> repository.createRoom(title.strip(), me.id(), code));
         // 만든 사람은 자동으로 참가한다. 따로 들어가게 할 이유가 없다.
         repository.join(roomId, me.id());
         return roomId;
+    }
+
+    /**
+     * 초대 코드로 참가한다.
+     *
+     * @return 들어간 방의 id
+     * @throws NotFoundException 코드 형식이 틀렸거나 그런 방이 없을 때.
+     *     <b>둘을 가르지 않는다</b> — 형식만 맞으면 "없는 코드"라고 알려주는 것은
+     *     찍어 보는 쪽에 유효한 코드를 좁혀 주는 일이다
+     */
+    @Transactional
+    public UUID joinByCode(String rawCode) {
+        String code = InviteCode.normalize(rawCode);
+        var room = (code == null ? Optional.<RoomRepository.RoomRow>empty() : repository.findByCode(code))
+                .orElseThrow(() -> new NotFoundException("그런 초대 코드가 없습니다"));
+
+        repository.join(room.id(), accounts.currentUser().id());
+        return room.id();
+    }
+
+    /**
+     * 초대 코드를 새로 뽑는다. 방장만.
+     *
+     * <p>코드가 새어 나갔을 때 되돌릴 방법이 필요하다. 링크만 있던 구조에서는 그것이 불가능했다 —
+     * 주소를 바꾸면 이미 들어온 사람들의 북마크가 가리키는 방도 함께 사라지기 때문이다.
+     * 코드는 문이 하나 더 있는 것이라 그 문만 바꿀 수 있다.
+     */
+    @Transactional
+    public String regenerateCode(UUID roomId) {
+        var me = accounts.currentUser();
+        var room = repository.findRoom(roomId).orElseThrow(() -> new NotFoundException("없는 방입니다"));
+        if (room.ownerId() != me.id()) {
+            throw new ForbiddenException("방을 만든 사람만 코드를 바꿀 수 있습니다");
+        }
+        return withFreshCode(code -> {
+            repository.updateCode(roomId, code);
+            return code;
+        });
+    }
+
+    /** 코드를 뽑아 넘기고, 겹치면 다시 뽑는다. */
+    private <T> T withFreshCode(java.util.function.Function<String, T> action) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return action.apply(InviteCode.generate());
+            } catch (DuplicateKeyException e) {
+                if (attempt >= CODE_ATTEMPTS) throw e;
+            }
+        }
     }
 
     @Transactional
@@ -94,6 +148,7 @@ public class RoomService {
                 room.title(),
                 room.ownerNickname(),
                 room.ownerId() == me.id(),
+                room.inviteCode(),
                 room.createdAt(),
                 members,
                 bookmarks,

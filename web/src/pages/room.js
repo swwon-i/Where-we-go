@@ -6,7 +6,7 @@
  */
 
 import { api, ApiError } from '../api.js';
-import { render, $, $$, esc, notice, busy } from '../dom.js';
+import { render, $, $$, esc, notice, busy, formatCode } from '../dom.js';
 import { loadKakao, MapUnavailable, mapNotice, createMap } from '../kakao.js';
 
 /** 출발지와 후보를 색으로 가른다. */
@@ -76,7 +76,12 @@ function paintShell() {
       <div class="room-head">
         <h2>${esc(state.title)}</h2>
         <span class="meta">${esc(state.ownerNickname)}의 방</span>
+        <span class="invite">
+          초대 코드
+          <code id="code" class="code-chip" title="누르면 복사됩니다">${esc(formatCode(state.inviteCode))}</code>
+        </span>
         <button id="share" class="link">링크 복사</button>
+        ${state.iAmOwner ? '<button id="regen" class="link">코드 재발급</button>' : ''}
         <span id="share-done" class="ok" hidden>복사했습니다</span>
         <span id="matrix-state" class="badge"></span>
       </div>
@@ -109,12 +114,34 @@ function paintShell() {
     </div>
   `);
 
-  $('#share').onclick = async () => {
-    await navigator.clipboard.writeText(window.location.href);
+  const flash = () => {
     const done = $('#share-done');
     done.hidden = false;
     setTimeout(() => { done.hidden = true; }, 1500);
   };
+
+  $('#share').onclick = async () => {
+    await navigator.clipboard.writeText(window.location.href);
+    flash();
+  };
+
+  // 코드를 눌러도 복사된다. 전화로 불러줄 때는 눈으로 읽고, 채팅으로 보낼 때는 복사한다.
+  $('#code').onclick = async () => {
+    await navigator.clipboard.writeText(state.inviteCode);
+    flash();
+  };
+
+  $('#regen')?.addEventListener('click', (e) =>
+    busy(e.target, async () => {
+      // 되돌릴 수 없다 — 이미 코드를 받은 사람은 못 들어오게 된다.
+      if (!confirm('코드를 새로 뽑으면 지금 코드는 더 이상 쓸 수 없습니다. 바꿀까요?')) return;
+      try {
+        await api.regenerateCode(roomId);
+        await roomPage({ roomId });
+      } catch (err) {
+        alert(err instanceof ApiError ? err.message : '바꾸지 못했습니다.');
+      }
+    }));
 
   $$('.tab').forEach((tab) => {
     tab.onclick = () => {

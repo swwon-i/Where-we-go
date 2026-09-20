@@ -153,6 +153,22 @@ button.link:hover { text-decoration: underline; }
 
 .pin-label { padding: 5px 9px; font-size: 12px; white-space: nowrap; color: #16181d; }
 
+/* ── 초대 코드 ────────────────────────────────────────────────────────── */
+.invite { color: var(--muted); font-size: 12px; }
+.code-chip {
+  font: 600 13px/1 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  letter-spacing: 1px; padding: 4px 8px; margin-left: 4px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--fg); cursor: pointer;
+}
+.room-row .code-chip { cursor: inherit; float: right; font-size: 12px; padding: 2px 6px; }
+.code-input {
+  font: 600 15px/1 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  letter-spacing: 2px; text-transform: uppercase;
+}
+.two-up { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 720px) { .two-up { grid-template-columns: 1fr; } }
+
 @media (max-width: 800px) {
   .room-body { flex-direction: column; }
   .map { height: 45vh; flex: none; }

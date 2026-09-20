@@ -23,7 +23,9 @@ import org.springframework.web.bind.annotation.RestController;
  * <pre>
  *   POST   /api/v1/rooms                              방 만들기
  *   GET    /api/v1/rooms                              내가 들어간 방들
- *   POST   /api/v1/rooms/{roomId}/members             참가
+ *   POST   /api/v1/rooms/join                         초대 코드로 참가
+ *   POST   /api/v1/rooms/{roomId}/members             링크로 참가
+ *   POST   /api/v1/rooms/{roomId}/code                초대 코드 재발급 (방장만)
  *   GET    /api/v1/rooms/{roomId}                     방 상태 (화면은 이것만 본다)
  *   PUT    /api/v1/rooms/{roomId}/members/me/origin   내 출발지
  *   POST   /api/v1/rooms/{roomId}/bookmarks           후보 담기
@@ -50,21 +52,48 @@ public class RoomController {
                     @Size(max = 50, message = "방 이름은 50자까지입니다")
                     String title) {}
 
-    public record RoomCreated(UUID roomId, String title) {}
+    public record RoomCreated(UUID roomId, String title, String inviteCode) {}
 
-    public record RoomSummary(UUID roomId, String title, String ownerNickname, Instant createdAt) {}
+    public record RoomSummary(
+            UUID roomId, String title, String ownerNickname, String inviteCode,
+            Instant createdAt) {}
+
+    /** 초대 코드로 참가. 하이픈·소문자는 서버가 정리한다. */
+    public record JoinByCodeRequest(String code) {}
 
     @PostMapping
     public ResponseEntity<RoomCreated> create(@Valid @RequestBody CreateRoomRequest request) {
         var roomId = rooms.create(request.title());
+        var view = rooms.view(roomId);
         return ResponseEntity.created(URI.create("/api/v1/rooms/" + roomId))
-                .body(new RoomCreated(roomId, request.title().strip()));
+                .body(new RoomCreated(roomId, view.title(), view.inviteCode()));
+    }
+
+    /**
+     * 초대 코드로 참가한다.
+     *
+     * <p>링크로 들어오는 길도 그대로 둔다 — 카톡으로 보낼 때는 그쪽이 편하다.
+     * 코드는 말로 불러주거나 받아 적을 수 있는 통로를 하나 더 여는 것이다.
+     */
+    @PostMapping("/join")
+    public RoomView joinByCode(@RequestBody JoinByCodeRequest request) {
+        var roomId = rooms.joinByCode(request.code());
+        return rooms.view(roomId);
+    }
+
+    /** 초대 코드 재발급. 방장만. 코드가 새어 나갔을 때 되돌리는 길이다. */
+    @PostMapping("/{roomId}/code")
+    public RoomCreated regenerateCode(@PathVariable UUID roomId) {
+        var code = rooms.regenerateCode(roomId);
+        var view = rooms.view(roomId);
+        return new RoomCreated(roomId, view.title(), code);
     }
 
     @GetMapping
     public List<RoomSummary> myRooms() {
         return rooms.myRooms().stream()
-                .map(r -> new RoomSummary(r.id(), r.title(), r.ownerNickname(), r.createdAt()))
+                .map(r -> new RoomSummary(
+                        r.id(), r.title(), r.ownerNickname(), r.inviteCode(), r.createdAt()))
                 .toList();
     }
 

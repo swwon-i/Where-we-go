@@ -7,6 +7,8 @@ import java.util.UUID;
 /**
  * 방 화면이 한 번에 받는 것. 프론트는 이 엔드포인트만 폴링한다.
  *
+ * @param inviteCode 사람이 받아 적어 들어올 수 있는 코드. 참가자에게만 보인다 —
+ *     방 안의 정보이므로 밖에서 조회할 수 있으면 코드의 뜻이 없어진다
  * @param matrixReady <b>계산 가능 여부</b>다. 계산 완료 여부가 아니다 — 행렬은 동기 계산이라
  *     "진행 중" 이라는 상태가 없다. 출발지를 정한 사람이 하나라도 있고 후보가 하나라도 있으면 참
  */
@@ -15,6 +17,7 @@ public record RoomView(
         String title,
         String ownerNickname,
         boolean iAmOwner,
+        String inviteCode,
         Instant createdAt,
         List<MemberView> members,
         List<BookmarkView> bookmarks,

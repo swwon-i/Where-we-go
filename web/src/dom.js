@@ -40,6 +40,15 @@ export function showFieldErrors(container, fields = {}) {
   });
 }
 
+/**
+ * 초대 코드를 네 글자씩 끊어 보여준다.
+ *
+ * 서버는 하이픈 없이 저장하고 입력에서도 무시한다. 끊는 것은 **눈으로 따라 읽기 위한 것**이라
+ * 화면의 일이다 — 저장 형태에 표시용 문자를 섞으면 비교할 때마다 지워야 한다.
+ */
+export const formatCode = (code) =>
+  (code && code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : (code ?? ''));
+
 /** 사람이 읽는 시간. "3분 전", "어제". */
 export function ago(isoString) {
   const seconds = (Date.now() - new Date(isoString).getTime()) / 1000;

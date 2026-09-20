@@ -6,10 +6,10 @@
  * 행렬 표를 만들 때(계획서 3주 전반) 상태가 실제로 복잡해지면 그때 다시 본다.
  */
 
-import { setUnauthorizedHandler } from './api.js';
+import { setUnauthorizedHandler, forgetCsrf } from './api.js';
 import { route, notFound, start, go, path } from './router.js';
 import { render, notice } from './dom.js';
-import { loadCurrentUser, currentUser } from './session.js';
+import { loadCurrentUser, currentUser, setCurrentUser } from './session.js';
 import { loginPage, setReturnTo } from './pages/login.js';
 import { roomsPage } from './pages/rooms.js';
 import { roomPage, leaveRoom } from './pages/room.js';
@@ -63,6 +63,12 @@ notFound(() => render(notice('없는 화면입니다. <a href="#/">처음으로<
  * 있기 때문이다(계획서 §8). 그때 조용히 실패하는 대신 로그인 화면으로 보낸다.
  */
 setUnauthorizedHandler(() => {
+  // **들고 있던 사용자부터 버린다.** 이걸 안 하면 로그인 화면이 "이미 로그인했네" 하고
+  // 방 목록으로 되돌리고, 그 화면이 다시 401 을 받아 무한히 오간다.
+  // 세션은 서버 메모리에 있으므로 서버를 다시 띄우기만 해도 이 상황이 된다.
+  setCurrentUser(null);
+  forgetCsrf();
+
   if (path() === '/login') return;
   setReturnTo(path());
   go('/login', { replace: true });
