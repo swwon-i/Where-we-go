@@ -8,6 +8,7 @@
 import { api, ApiError } from '../api.js';
 import { render, $, $$, esc, notice, busy, formatCode } from '../dom.js';
 import { loadKakao, MapUnavailable, mapNotice, createMap } from '../kakao.js';
+import { matrixPanel, resetMatrix } from './matrix.js';
 
 /** 출발지와 후보를 색으로 가른다. */
 const ORIGIN_COLOR = '#2563eb';
@@ -29,6 +30,8 @@ export function leaveRoom() {
   mapView = null;
   state = null;
   pickMode = null;
+  matrix = null;
+  resetMatrix();
 }
 
 export async function roomPage({ roomId: id }) {
@@ -94,6 +97,7 @@ function paintShell() {
             <button class="tab is-on" data-panel="members">참가자</button>
             <button class="tab" data-panel="bookmarks">후보</button>
             <button class="tab" data-panel="find">장소 찾기</button>
+            <button class="tab" data-panel="matrix">이동시간</button>
           </div>
 
           <section id="panel-members" class="panel-body"></section>
@@ -109,6 +113,7 @@ function paintShell() {
             </p>
             <div id="find-results"></div>
           </section>
+          <section id="panel-matrix" class="panel-body" hidden></section>
         </aside>
       </div>
     </div>
@@ -149,6 +154,13 @@ function paintShell() {
       $$('.panel-body').forEach((p) => {
         p.hidden = p.id !== `panel-${tab.dataset.panel}`;
       });
+      // 행렬은 탭을 처음 열 때 만든다. 방에 들어오자마자 계산하지 않는다 —
+      // 재료가 없으면 실패할 뿐이고, 있어도 사용자가 원할 때 돌려야 한다.
+      // 표를 340px 에 우겨넣으면 읽을 수 없다. 행렬 탭에서만 패널을 넓힌다.
+      $('.side').classList.toggle('wide', tab.dataset.panel === 'matrix');
+      if (tab.dataset.panel === 'matrix' && !matrix) {
+        matrix = matrixPanel($('#panel-matrix'), roomId);
+      }
     };
   });
 
@@ -194,6 +206,7 @@ async function setUpMap() {
 }
 
 let pickMode = null;
+let matrix = null;
 
 function paintMarkers() {
   if (!mapView) return;

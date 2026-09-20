@@ -119,6 +119,12 @@ export const api = {
   removeBookmark: (roomId, bookmarkId) =>
     request('DELETE', `/rooms/${roomId}/bookmarks/${bookmarkId}`),
 
+  // ── 행렬 ──────────────────────────────────────────────────────────────
+  matrix: (roomId, departureHour) =>
+    request('POST', `/rooms/${roomId}/matrix`, { departureHour }),
+  routeDetail: (roomId, params) =>
+    request('GET', `/rooms/${roomId}/routes?${new URLSearchParams(params)}`),
+
   // ── 장소 ──────────────────────────────────────────────────────────────
   nearby: (params) => request('GET', `/places/nearby?${new URLSearchParams(params)}`),
   search: (params) => request('GET', `/places/search?${new URLSearchParams(params)}`),

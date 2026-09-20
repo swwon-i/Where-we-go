@@ -111,7 +111,7 @@ public class RoomRepository {
                 new MapSqlParameterSource().addValue("room", roomId).addValue("uid", userId));
     }
 
-    boolean isMember(UUID roomId, long userId) {
+    public boolean isMember(UUID roomId, long userId) {
         return !jdbc.queryForList(
                         "SELECT 1 FROM room_member WHERE room_id = :room AND user_id = :uid",
                         new MapSqlParameterSource().addValue("room", roomId).addValue("uid", userId),
@@ -190,6 +190,57 @@ public class RoomRepository {
                 params);
     }
 
+    /**
+     * 행렬 계산에 쓸 출발지들. 정한 사람만.
+     *
+     * <p>{@link RoomView.MemberView} 와 달리 <b>그래프 노드 id 를 들고 온다</b> —
+     * 화면에는 필요 없지만 탐색에는 그것이 시작점이다.
+     *
+     * @param nodeId {@code graph_node.id}
+     * @param buildId 스냅할 때의 빌드. 활성 빌드와 다르면 다시 붙여야 한다
+     */
+    public record OriginRow(
+            long memberId, String nickname, String label,
+            double lng, double lat, long nodeId, double snapM, long buildId) {}
+
+    public List<OriginRow> originsOf(UUID roomId) {
+        return jdbc.query(
+                """
+                SELECT m.id, u.nickname, m.origin_label, m.origin_node_id,
+                       m.origin_snap_m, m.origin_build_id,
+                       ST_X(ST_Transform(m.origin_geom, 4326)) AS lng,
+                       ST_Y(ST_Transform(m.origin_geom, 4326)) AS lat
+                FROM room_member m JOIN app_user u ON u.id = m.user_id
+                WHERE m.room_id = :room AND m.origin_geom IS NOT NULL
+                ORDER BY m.joined_at, m.id
+                """,
+                new MapSqlParameterSource("room", roomId),
+                (rs, i) -> new OriginRow(
+                        rs.getLong("id"),
+                        rs.getString("nickname"),
+                        rs.getString("origin_label"),
+                        rs.getDouble("lng"),
+                        rs.getDouble("lat"),
+                        rs.getLong("origin_node_id"),
+                        rs.getFloat("origin_snap_m"),
+                        rs.getLong("origin_build_id")));
+    }
+
+    /** 출발지를 다시 붙인 결과만 갱신한다. 좌표와 라벨은 그대로다. */
+    public void resnapOrigin(long memberId, long nodeId, double snapM, long buildId) {
+        jdbc.update(
+                """
+                UPDATE room_member
+                SET origin_node_id = :node, origin_snap_m = :snap, origin_build_id = :build
+                WHERE id = :id
+                """,
+                new MapSqlParameterSource()
+                        .addValue("id", memberId)
+                        .addValue("node", nodeId)
+                        .addValue("snap", snapM)
+                        .addValue("build", buildId));
+    }
+
     // ── 북마크 ──────────────────────────────────────────────────────────────
 
     /** {@code poi} 한 건의 이름·주소·좌표. 북마크에 복사해 둘 스냅샷이다. */
@@ -234,7 +285,7 @@ public class RoomRepository {
                 Long.class);
     }
 
-    List<RoomView.BookmarkView> bookmarks(UUID roomId, long viewerId) {
+    public List<RoomView.BookmarkView> bookmarks(UUID roomId, long viewerId) {
         return jdbc.query(
                 """
                 SELECT b.id, b.poi_id, b.name, b.address, b.added_by, u.nickname, b.created_at,
