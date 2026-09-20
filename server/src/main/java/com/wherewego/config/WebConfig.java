@@ -15,7 +15,10 @@ public class WebConfig implements WebMvcConfigurer {
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
                 .allowedOrigins("http://localhost:5173", "http://localhost:8080")
-                .allowedMethods("GET", "POST", "PUT", "DELETE");
+                .allowedMethods("GET", "POST", "PUT", "DELETE")
+                // 세션 쿠키를 주고받아야 하므로 자격 증명을 허용한다.
+                // 이것을 켜면 allowedOrigins 에 "*" 를 쓸 수 없다 — 출처를 못박아야 한다.
+                .allowCredentials(true);
     }
 
     /**

@@ -18,6 +18,17 @@ wwg:
 
 server:
   port: 8080
+  servlet:
+    session:
+      cookie:
+        # 자바스크립트가 세션 쿠키를 읽지 못하게 한다. XSS 로 쿠키를 훔쳐가는 경로를 막는다.
+        http-only: true
+        # 다른 사이트에서 시작된 요청에는 쿠키를 붙이지 않는다. CSRF 토큰과 겹치는 방어지만
+        # 둘 중 하나가 뚫려도 나머지가 남는다.
+        same-site: lax
+        # 운영에서는 true 여야 한다(HTTPS 전용). 로컬은 http 라 켜면 로그인이 안 된다.
+        secure: ${WWG_COOKIE_SECURE:false}
+      timeout: 7d
 
 logging:
   level:

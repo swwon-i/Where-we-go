@@ -1,2 +1,19 @@
-# Auto detect text files and perform LF normalization
+# 기본은 자동 판별 + 저장소에는 LF 로 보관
 * text=auto
+
+# 리눅스 컨테이너 안에서 실행되는 것은 반드시 LF 여야 한다.
+# gradlew 가 CRLF 로 체크아웃되면 셔뱅이 "#!/bin/sh\r" 이 되어
+# 도커 빌드가 exit 127(command not found)로 죽는다. 실제로 죽었다.
+gradlew text eol=lf
+*.sh    text eol=lf
+
+# 윈도우 배치는 반대로 CRLF 여야 한다 (etl/run_daily.cmd 등).
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 이진 파일은 건드리지 않는다.
+*.jar   binary
+*.xlsx  binary
+*.png   binary
+*.jpg   binary
+*.graphml -text

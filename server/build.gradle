@@ -24,9 +24,17 @@ dependencies {
     // JPA/Hibernate Spatial 은 쓰지 않는다 — geometry 매핑에서 시간을 태운다 (계획서 §2).
     // 공간 쿼리를 SQL 로 직접 쓰기 위해 JdbcTemplate 을 쓴다.
     implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    // 세션 기반 로그인. BCrypt 와 세션 고정 공격 방어를 직접 만들지 않기 위해서다.
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    // 회원가입 입력 검증(@Valid). 길이·형식 규칙을 컨트롤러 밖으로 뺀다.
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
     runtimeOnly 'org.postgresql:postgresql'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // Spring Boot 4 에서 MockMvc 지원이 starter-test 에서 빠져 별도 모듈이 되었다.
+    testImplementation 'org.springframework.boot:spring-boot-webmvc-test'
+    testImplementation 'org.junit.jupiter:junit-jupiter-params'
+    testImplementation 'org.springframework.security:spring-security-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 

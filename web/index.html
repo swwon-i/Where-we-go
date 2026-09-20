@@ -3,27 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Where-We-Go! — 장소 검색</title>
+  <title>Where-We-Go!</title>
   <link rel="stylesheet" href="/src/style.css">
 </head>
 <body>
   <header>
-    <h1>Where-We-Go!<small>장소 검색</small></h1>
-    <input type="search" id="q" placeholder="상호명 (비우면 반경 검색)">
-    <select id="radius">
-      <option value="300">300m</option>
-      <option value="500" selected>500m</option>
-      <option value="1000">1km</option>
-      <option value="2000">2km</option>
-    </select>
-    <label><input type="checkbox" id="includeClosed"> 폐업 포함</label>
-    <button id="go">이 지점에서 검색</button>
-    <span id="stat">—</span>
+    <a class="brand" href="#/">Where-We-Go!</a>
+    <nav>
+      <a href="#/rooms">내 방</a>
+      <a href="#/explore">둘러보기</a>
+    </nav>
+    <div id="who"></div>
   </header>
-  <main>
-    <div id="map"></div>
-    <div id="list"></div>
-  </main>
+
+  <main id="app"></main>
+
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>
