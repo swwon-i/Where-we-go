@@ -246,8 +246,10 @@ def headways(df: pd.DataFrame, hour: int | None = None) -> pd.DataFrame:
     ordered = ordered.assign(gap_sec=gap).dropna(subset=["gap_sec"])
     ordered = ordered[ordered["gap_sec"].between(HEADWAY_MIN_SEC, HEADWAY_MAX_SEC)]
     if hour is not None:
-        at = ordered["arrive_sec"]
-        ordered = ordered[(at >= hour * 3600) & (at < (hour + 1) * 3600)]
+        # 자정 이후는 24:xx·25:xx 로 적혀 있다. 24 로 나눈 나머지로 시간대를 매겨야
+        # 24:30 도착이 0시 표본이 된다 — 그냥 비교하면 0시 배차가 통째로 빠진다.
+        at_hour = (ordered["arrive_sec"] // 3600).astype(int) % 24
+        ordered = ordered[at_hour == hour]
 
     out = (
         ordered.groupby(["line_key", "SI_ID", "STATION_NM", "INOUTTAG"])

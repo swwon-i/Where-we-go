@@ -18,7 +18,12 @@
 import { api, ApiError } from '../api.js';
 import { $, $$, esc, notice, busy } from '../dom.js';
 
-const HOURS = [8, 12, 15, 19, 21, 23];
+/**
+ * 출발 시각대는 0~23시 전부 고를 수 있다. 예전에는 8·12·15·19·21·23시만 골랐는데 근거가 없었고,
+ * 결과적으로 운행 없는 시간대가 가려져 있었다. 이제 그래프가 "운행 없음"을 알므로
+ * 새벽을 골라도 존재하지 않는 운행으로 경로가 나오지 않는다 — 새벽 2시는 N버스와 도보뿐이다.
+ */
+const DEFAULT_HOUR = 19;
 
 /** 눌러서 펼쳐 둔 칸. 다시 그려도 열린 채로 둔다. */
 let openCell = null;
@@ -32,17 +37,17 @@ export function resetMatrix() {
  * @param {string} roomId
  */
 export function matrixPanel(container, roomId) {
-  let hour = 19;
+  let hour = DEFAULT_HOUR;
   let data = null;
 
   function paint() {
     container.innerHTML = `
       <div class="matrix-bar">
-        <label>
+        <label class="hour-pick">
           출발 시각대
-          <select id="hour">
-            ${HOURS.map((h) => `<option value="${h}"${h === hour ? ' selected' : ''}>${h}시</option>`).join('')}
-          </select>
+          <input id="hour" type="range" min="0" max="23" step="1" value="${hour}"
+                 aria-valuetext="${hour}시">
+          <output id="hour-out">${hourLabel(hour)}</output>
         </label>
         <button id="calc" class="primary">계산</button>
         <span id="matrix-stats" class="meta"></span>
@@ -50,7 +55,15 @@ export function matrixPanel(container, roomId) {
       <div id="matrix-body">${data ? table(data) : notice('계산을 눌러 보세요.')}</div>
     `;
 
-    $('#hour', container).onchange = (e) => { hour = Number(e.target.value); };
+    const slider = $('#hour', container);
+    // 끌면서는 표시만 바꾸고, 놓았을 때 이미 계산한 표가 있으면 새 시각대로 다시 계산한다.
+    // 19시와 21시를 오가며 비교하는 것이 이 화면의 쓰임새다.
+    slider.oninput = () => {
+      hour = Number(slider.value);
+      slider.setAttribute('aria-valuetext', `${hour}시`);
+      $('#hour-out', container).textContent = hourLabel(hour);
+    };
+    slider.onchange = () => { if (data) calculate(); };
     $('#calc', container).onclick = (e) => busy(e.target, calculate);
     if (data) wireCells();
   }
@@ -195,6 +208,11 @@ function cellCell(row, cell, origin, index, isFastest) {
         환승 ${cell.transfers} · 도보 ${Math.round(cell.walkDistanceM)}m
       </div>
     </td>`;
+}
+
+/** 새벽에는 대부분 운행하지 않는다는 것을 미리 알려 둔다. 빈칸이 많아도 놀라지 않도록. */
+function hourLabel(h) {
+  return h >= 1 && h <= 4 ? `${h}시 · 심야` : `${h}시`;
 }
 
 function minutes(seconds) {

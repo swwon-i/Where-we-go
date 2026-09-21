@@ -141,7 +141,10 @@ class Graph:
         return row[0], float(row[1])
 
     def edge_weight(self, weight: int, by_hour, hour: int | None) -> int:
-        """시간대가 주어지면 배열에서 고른다. 없으면 기본 가중치."""
+        """시간대가 주어지면 배열에서 고른다. 없으면 기본 가중치.
+
+        음수(NO_SERVICE)는 그 시간대에 운행하지 않는다는 뜻이다. 부르는 쪽이 건너뛴다.
+        """
         if hour is None or by_hour is None:
             return weight
         return int(by_hour[hour])
@@ -167,7 +170,10 @@ def dijkstra(graph: Graph, src: int, targets: set[int], hour: int | None = None)
         seen += 1
         remaining.discard(u)
         for v, w, by_hour, kind, line in graph.adj[u]:
-            nd = d + graph.edge_weight(w, by_hour, hour)
+            cost = graph.edge_weight(w, by_hour, hour)
+            if cost < 0:
+                continue  # 이 시간대에는 운행하지 않는다
+            nd = d + cost
             if nd < dist.get(v, 1 << 60):
                 dist[v] = nd
                 prev[v] = (u, kind, line, nd - d)

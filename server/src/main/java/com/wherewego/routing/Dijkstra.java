@@ -92,7 +92,9 @@ public final class Dijkstra {
             int end = graph.edgeEnd(u);
             for (int e = graph.edgeStart(u); e < end; e++) {
                 int v = graph.edgeTarget(e);
-                int nd = d + graph.weight(e, hour);
+                int w = graph.weight(e, hour);
+                if (w < 0) continue;  // TransitGraph.NO_SERVICE — 이 시간대에는 운행하지 않는다
+                int nd = d + w;
                 if (nd < dist[v]) {
                     dist[v] = nd;
                     prevNode[v] = u;

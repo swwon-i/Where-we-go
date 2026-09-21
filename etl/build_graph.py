@@ -102,6 +102,18 @@ EXPRESS_TRANSFER_SEC = 30
 #: 세어서 보고한다.** 모르는 값을 5분으로 채우면 하루 한 대 다니는 노선이 5분마다 오는
 #: 노선이 된다 — 없는 편이 덜 틀린다.
 
+#: 시간대 배열에서 "이 시간에는 운행하지 않는다"를 뜻하는 값. 탐색은 이 엣지를 건너뛴다.
+#:
+#: 예전에는 운행 없는 시간대를 그 구간의 중앙값으로 채웠다. 새벽 0~4시에만 다니는 N26 이
+#: 그 때문에 낮 19시간 동안 다니는 노선이 됐고, 새벽 4시에는 운행하지 않는 지하철이 다녔다.
+#: 0 이 아니라 음수를 쓰는 이유는 0초가 "공짜로 지나간다"로 읽히기 때문이다.
+NO_SERVICE = -1
+
+#: 버스 구간이 그 시간대에 "운행한다"고 볼 최소 비율. 요일 구분에 드는 날 중 과반이다.
+#: 평일 5일 중 3일 이상 기록이 있어야 한다. 하루 이틀만 찍힌 값은 첫차·막차 경계에서
+#: 우연히 걸친 것이라 그 시간대의 정규 운행으로 보기 어렵다.
+BUS_SERVICE_MIN_SHARE = 0.5
+
 #: 승강장 ↔ 대합실 이동시간을 환승 소요시간의 몇 배로 볼 것인가.
 #:
 #: 환승은 승강장 → 대합실 → 승강장 이므로 편도는 그 절반이다. 상수를 새로 만들지 않고
@@ -173,12 +185,30 @@ def load_transfers(path: str | Path) -> pd.DataFrame:
     return both.drop_duplicates(subset=["station", "line_a", "line_b"])
 
 
-def board_weights_by_hour(headways: pd.DataFrame) -> dict[tuple[str, str], list[int]]:
-    """(호선, 역명) → 시간대별 대기시간 24개.
+def subway_service_hours(timetable: pd.DataFrame) -> dict[tuple[str, str], set[int]]:
+    """(노선, 역명) → 열차가 한 대라도 서는 시간대.
+
+    자정 이후는 `24:xx`·`25:xx` 로 적혀 있으므로 24 로 나눈 나머지를 쓴다 — 25:14 는 1시다.
+    """
+    hour = (timetable["arrive_sec"] // 3600).astype(int) % 24
+    keyed = pd.DataFrame({
+        "line": timetable["line_key"],
+        "key": timetable["STATION_NM"].map(normalize_station),
+        "hour": hour,
+    }).drop_duplicates()
+    return {k: set(g["hour"]) for k, g in keyed.groupby(["line", "key"])}
+
+
+def board_weights_by_hour(
+    headways: pd.DataFrame, service: dict[tuple[str, str], set[int]] | None = None
+) -> dict[tuple[str, str], list[int]]:
+    """(호선, 역명) → 시간대별 대기시간 24개. 운행하지 않는 시간대는 NO_SERVICE.
 
     대기는 배차의 절반으로 본다 — 언제 도착할지 모르고 오면 평균적으로 그렇다.
-    표본이 없는 시간대는 앞뒤 값으로 메운다. 표본이 하나도 없는 승강장은 여기 키가 없고,
-    BOARD 를 만들지 않는다(insert_board_alight_edges).
+    열차는 서는데 배차 표본이 없는 시간대(첫차 시간대 등)는 앞뒤 값으로 메운다.
+    표본이 하나도 없는 승강장은 여기 키가 없고, BOARD 를 만들지 않는다.
+
+    `service` 가 없으면 24시간 운행으로 본다(테스트용).
 
     방향(상/하행)은 합친다. 플랫폼 노드가 (역 × 노선) 이라 방향을 나누지 않기 때문이다 —
     나누면 노드가 배로 늘고, 배차는 방향별 차이가 크지 않다.
@@ -190,10 +220,25 @@ def board_weights_by_hour(headways: pd.DataFrame) -> dict[tuple[str, str], list[
         series = pd.Series(
             [per_hour.get(h, np.nan) for h in range(24)], index=range(24), dtype=float
         )
-        # 키가 있다는 것은 표본이 한 시간대라도 있다는 뜻이라 앞뒤로 채우면 빈칸이 남지 않는다.
         filled = series.ffill().bfill()
-        out[(line, key)] = [max(1, round(v / 2)) for v in filled]
+        runs = service.get((line, key), set()) if service is not None else set(range(24))
+        out[(line, key)] = [
+            max(1, round(v / 2)) if h in runs else NO_SERVICE for h, v in enumerate(filled)
+        ]
     return out
+
+
+def hourly_literal(values, offset: int = 0) -> str:
+    """시간대 배열을 PostgreSQL 배열 리터럴로. NO_SERVICE 칸에는 offset 을 더하지 않는다."""
+    return "{" + ",".join(
+        str(NO_SERVICE if v == NO_SERVICE else v + offset) for v in values
+    ) + "}"
+
+
+def representative(values) -> int:
+    """시간대 배열의 대표값 — 운행하는 시간대의 중앙값. 시간대를 안 쓰는 탐색이 이 값을 본다."""
+    running = [v for v in values if v != NO_SERVICE]
+    return int(round(float(np.median(running)))) if running else NO_SERVICE
 
 
 def station_traverse_seconds(transfers: pd.DataFrame) -> tuple[dict[str, int], int]:
@@ -469,8 +514,8 @@ def insert_board_alight_edges(
                 unpriced += 1
                 continue
             walk = traverse.get(key, traverse_default)
-            arr = "{" + ",".join(str(walk + v) for v in hours) + "}"
-            yield (build_id, sid, pid, "BOARD", walk + hours[8], arr, line)
+            yield (build_id, sid, pid, "BOARD", walk + representative(hours),
+                   hourly_literal(hours, walk), line)
 
     def alight_rows():
         for (key, line), pid in platform.items():
@@ -534,10 +579,10 @@ def insert_transfer_edges(
                 if not wait_hours:
                     # 갈아탈 노선의 배차를 모르면 BOARD 와 마찬가지로 태우지 않는다.
                     continue
-                arr = "{" + ",".join(str(walk + w) for w in wait_hours) + "}"
                 rows.append(
                     (build_id, platform[(key, a)], platform[(key, b)],
-                     "TRANSFER", walk + wait_hours[8], arr, b)
+                     "TRANSFER", walk + representative(wait_hours),
+                     hourly_literal(wait_hours, walk), b)
                 )
 
     with conn.cursor() as cur:
@@ -564,25 +609,45 @@ def load_bus_routes(route_path) -> pd.DataFrame:
     return routes[~routes["노선_유형"].isin(BUS_EXCLUDED_TYPES)].reset_index(drop=True)
 
 
-def load_bus_sections(section_path, routes: pd.DataFrame, weektag: str) -> pd.DataFrame:
-    """서울 버스 구간과 시간대별 운행시간.
+BUS_HOUR_COLS = [f"운행시간_{h:02d}시" for h in range(24)]
 
-    구간 데이터는 하루치씩 7일이 들어 있다. 요일 구분에 맞는 날짜만 고른다 —
-    `기준_날짜` 의 요일로 판별한다(WEEKTAG 컬럼이 없다).
+
+def load_bus_sections(section_path, routes: pd.DataFrame, weektag: str) -> pd.DataFrame:
+    """서울 버스 구간과 시간대별 운행시간. 구간 하나당 한 행, 요일 구분에 드는 날을 모두 합친다.
+
+    구간 데이터는 하루치씩 7일이 들어 있고 WEEKTAG 컬럼이 없어 `기준_날짜` 의 요일로 고른다.
+    예전에는 그중 **첫날 하루**만 썼다. 날마다 편차가 커서(6411번 18시: 월 310 · 화 325 ·
+    수 269분) 그날의 사고·날씨가 그대로 그래프에 들어갔다. 이제 aggregate_bus_sections 로 합친다.
     """
-    cols = ["기준_날짜", "노선_ID", "출발_정류장_ID", "도착_정류장_ID"] + [
-        f"운행시간_{h:02d}시" for h in range(24)
-    ]
+    cols = ["기준_날짜", "노선_ID", "출발_정류장_ID", "도착_정류장_ID"] + BUS_HOUR_COLS
     sec = pd.read_csv(section_path, encoding="cp949", dtype=str, usecols=cols)
 
     dates = sorted(sec["기준_날짜"].unique())
-    weekday = {d: pd.Timestamp(d).dayofweek for d in dates}
     want = {"DAY": range(0, 5), "SAT": [5], "END": [6]}[weektag]
-    picked = [d for d in dates if weekday[d] in want]
-    sec = sec[sec["기준_날짜"] == picked[0]]
+    picked = [d for d in dates if pd.Timestamp(d).dayofweek in want]
 
     seoul = set(routes["노선_ID"])
-    return sec[sec["노선_ID"].isin(seoul)].reset_index(drop=True)
+    sec = sec[sec["기준_날짜"].isin(picked) & sec["노선_ID"].isin(seoul)]
+    return aggregate_bus_sections(sec, days=len(picked))
+
+
+def aggregate_bus_sections(sec: pd.DataFrame, days: int) -> pd.DataFrame:
+    """날짜별 구간 행을 구간 하나로 합친다. 시간대 칸은 초, 또는 NO_SERVICE.
+
+    원본의 0 은 "그 시간대에 이 구간을 지난 버스가 없다"는 뜻이다. 시간대마다
+    **운행한 날이 과반**(BUS_SERVICE_MIN_SHARE)이면 운행한 날들의 중앙값을, 아니면
+    NO_SERVICE 를 쓴다. 0 을 날짜 중앙값에 섞으면 운행시간이 짧아 보이므로 섞지 않는다.
+    """
+    keys = ["노선_ID", "출발_정류장_ID", "도착_정류장_ID"]
+    values = sec[BUS_HOUR_COLS].apply(pd.to_numeric, errors="coerce")
+    running = values.where(values > 0)
+    grouped = pd.concat([sec[keys], running], axis=1).groupby(keys, sort=False)
+
+    median = grouped[BUS_HOUR_COLS].median()
+    count = grouped[BUS_HOUR_COLS].count()
+    need = days * BUS_SERVICE_MIN_SHARE
+    out = median.round().where(count > need).fillna(NO_SERVICE).astype(int)
+    return out.reset_index()
 
 
 def _subway_route_name(key: str) -> str:
@@ -748,9 +813,8 @@ def insert_bus_nodes_edges(
         stats["stops"] = len(stop_node)
         stats["platforms"] = len(platform)
 
-        # RIDE — 시간대별 운행시간을 배열로.
-        hours = valid[hour_cols].apply(pd.to_numeric, errors="coerce").to_numpy()
-        base = np.nanmedian(np.where(hours > 0, hours, np.nan), axis=1)
+        # RIDE — 시간대별 운행시간을 배열로. 운행 없는 시간대는 NO_SERVICE 로 남긴다.
+        hours = valid[hour_cols].to_numpy()
 
         def ride_rows():
             for i, r in enumerate(valid.itertuples()):
@@ -758,17 +822,15 @@ def insert_bus_nodes_edges(
                 b = platform.get((r.도착_정류장_ID, r.노선_ID))
                 if a is None or b is None or a == b:
                     continue
-                med = base[i]
-                if not np.isfinite(med) or not (BUS_RUN_MIN_SEC <= med <= BUS_RUN_MAX_SEC):
-                    continue
-                # 운행이 없는 시간대(0)는 그 노선의 중앙값으로 메운다.
-                # 배열을 비우면 탐색이 기본 가중치로 떨어져 시간대 비교가 무의미해진다.
                 arr = [
-                    int(min(max(v if v and v > 0 else med, BUS_RUN_MIN_SEC), BUS_RUN_MAX_SEC))
+                    NO_SERVICE if v == NO_SERVICE
+                    else int(min(max(v, BUS_RUN_MIN_SEC), BUS_RUN_MAX_SEC))
                     for v in hours[i]
                 ]
-                yield (build_id, a, b, "RIDE", int(med), "{" + ",".join(map(str, arr)) + "}",
-                       r.노선_ID)
+                med = representative(arr)
+                if med == NO_SERVICE:
+                    continue  # 어느 시간대에도 과반 운행하지 않는 구간
+                yield (build_id, a, b, "RIDE", med, hourly_literal(arr), r.노선_ID)
 
         stats["ride"] = copy_rows(
             cur, "graph_edge",
@@ -909,7 +971,7 @@ def main(argv: list[str] | None = None) -> int:
     print("시각표 읽는 중…", flush=True)
     tt = load_timetable(args.timetable, args.weektag)
     legs = inter_station_times(tt)
-    waits = board_weights_by_hour(headways_by_hour(tt))
+    waits = board_weights_by_hour(headways_by_hour(tt), subway_service_hours(tt))
     transfers = load_transfers(args.transfers)
 
     # 급행은 별도 노선이므로 급행이 서는 역에만 급행 플랫폼이 생긴다.

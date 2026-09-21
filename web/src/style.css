@@ -162,6 +162,8 @@ button.link:hover { text-decoration: underline; }
 }
 .matrix-bar label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 .matrix-bar .meta { flex-basis: 100%; font-variant-numeric: tabular-nums; }
+.hour-pick input[type="range"] { width: 180px; padding: 0; border: 0; accent-color: var(--accent); }
+.hour-pick output { min-width: 5.5em; color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
 
 table.matrix { border-collapse: collapse; width: 100%; }
 table.matrix th, table.matrix td {

@@ -269,6 +269,16 @@ class TestHeadways:
         ]
         assert headways(frame(rows), hour=9).iloc[0]["headway_sec"] == 240
 
+    def test_past_midnight_counts_as_hour_zero(self):
+        """24:20 · 24:30 도착은 0시 표본이다. 그냥 비교하면 0시 배차가 통째로 빠진다."""
+        rows = [
+            {"LINE": "2", "INOUTTAG": "IN", "TRAIN_NO": f"T{i}", "SI_ID": "S", "STATION_NM": "강남",
+             "GUBHANG": "0", "STT": t, "EDT": t}
+            for i, t in enumerate(["24:20:00", "24:30:00"])
+        ]
+        at0 = headways(frame(rows), hour=0)
+        assert len(at0) == 1 and at0.iloc[0]["headway_sec"] == 600
+
     def test_hour_filter(self, branching_line):
         assert headways(branching_line, hour=9).empty
 

@@ -131,5 +131,43 @@ class DijkstraTest {
                             .dist()[g.indexOf(2)])
                     .isEqualTo(200);  // B 우회
         }
+
+        @Test
+        @DisplayName("운행 없는 시간대의 엣지는 건너뛴다 — 낮에 N버스를 태우지 않는다")
+        void noServiceHourIsSkipped() {
+            // 새벽 2시에만 다니는 직통(10초)과 늘 다니는 우회(200초).
+            var nightOnly = new int[24];
+            Arrays.fill(nightOnly, TransitGraph.NO_SERVICE);
+            nightOnly[2] = 10;
+            var g = TestGraphs.builder()
+                    .platform(1, TransitMode.BUS, "N26", "출발")
+                    .platform(2, TransitMode.BUS, "N26", "도착")
+                    .platform(3, TransitMode.BUS, "간선", "우회")
+                    .hourlyEdge(1, 2, 10, nightOnly, EdgeKind.RIDE, "N26")
+                    .edge(1, 3, 100, EdgeKind.RIDE, "간선")
+                    .edge(3, 2, 100, EdgeKind.RIDE, "간선")
+                    .build();
+            assertThat(Dijkstra.run(g, g.indexOf(1), new int[] {g.indexOf(2)}, 2)
+                            .dist()[g.indexOf(2)])
+                    .isEqualTo(10);   // 새벽 2시에는 N버스
+            assertThat(Dijkstra.run(g, g.indexOf(1), new int[] {g.indexOf(2)}, 19)
+                            .dist()[g.indexOf(2)])
+                    .isEqualTo(200);  // 19시에는 다니지 않으므로 우회
+        }
+
+        @Test
+        @DisplayName("운행 없음은 공짜가 아니다 — 그 엣지뿐이면 도달 불가")
+        void noServiceIsNotFree() {
+            var closed = new int[24];
+            Arrays.fill(closed, TransitGraph.NO_SERVICE);
+            closed[8] = 60;
+            var g = TestGraphs.builder()
+                    .platform(1, TransitMode.SUBWAY, "2", "A")
+                    .platform(2, TransitMode.SUBWAY, "2", "B")
+                    .hourlyEdge(1, 2, 60, closed, EdgeKind.RIDE, "2")
+                    .build();
+            var r = Dijkstra.run(g, g.indexOf(1), new int[] {g.indexOf(2)}, 3);
+            assertThat(r.reached(g.indexOf(2))).isFalse();
+        }
     }
 }

@@ -77,6 +77,24 @@ class TestDijkstra:
         g = make_graph([(1, 2, 42, by_hour, "RIDE", "2")])
         assert dijkstra(g, 1, {2}, hour=None)[0][2] == 42
 
+    def test_no_service_hour_is_skipped(self):
+        """-1(NO_SERVICE)은 그 시간대에 운행하지 않는다는 뜻이다. 공짜로 지나가면 안 된다."""
+        night_only = [-1] * 24
+        night_only[2] = 10
+        g = make_graph([
+            (1, 2, 10, night_only, "RIDE", "N26"),
+            (1, 3, 100, None, "RIDE", "간선"),
+            (3, 2, 100, None, "RIDE", "간선"),
+        ])
+        assert dijkstra(g, 1, {2}, hour=2)[0][2] == 10
+        assert dijkstra(g, 1, {2}, hour=19)[0][2] == 200
+
+    def test_no_service_only_edge_is_unreachable(self):
+        closed = [-1] * 24
+        closed[8] = 60
+        g = make_graph([(1, 2, 60, closed, "RIDE", "2")])
+        assert 2 not in dijkstra(g, 1, {2}, hour=3)[0]
+
     def test_hour_changes_chosen_path(self):
         """시간대에 따라 다른 경로가 선택되어야 한다 — 이것이 시간대 비교 기능의 근거다."""
         fast_then_slow = [50] * 24
