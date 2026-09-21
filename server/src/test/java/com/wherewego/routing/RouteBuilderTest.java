@@ -120,8 +120,63 @@ class RouteBuilderTest {
                     .build();
             var route = route(g, 10, 33);
             assertThat(route.legs().stream().map(Leg::kind))
-                    .containsExactly("SUBWAY", "WALK", "BUS");
+                    .containsExactly("BOARD", "SUBWAY", "WALK", "TRANSFER", "BUS");
             assertThat(route.transfers()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("환승은 따로 한 줄이고, 탈것 줄은 주행만 담는다 — '2정차 10분' 이 안 나온다")
+        void transferIsItsOwnLeg() {
+            var g = TestGraphs.builder()
+                    .route(TransitMode.SUBWAY, "5", "5호선")
+                    .route(TransitMode.SUBWAY, "6", "6호선")
+                    .stop(10, TransitMode.SUBWAY, "화곡")
+                    .platform(11, TransitMode.SUBWAY, "5", "화곡")
+                    .platform(12, TransitMode.SUBWAY, "5", "공덕")
+                    .platform(13, TransitMode.SUBWAY, "6", "공덕")
+                    .platform(14, TransitMode.SUBWAY, "6", "삼각지")
+                    .stop(15, TransitMode.SUBWAY, "삼각지")
+                    .walk(16)
+                    .edge(10, 11, 202, EdgeKind.BOARD, "5")
+                    .edge(11, 12, 1440, EdgeKind.RIDE, "5")
+                    .edge(12, 13, 241, EdgeKind.TRANSFER, "6")
+                    .edge(13, 14, 240, EdgeKind.RIDE, "6")
+                    .edge(14, 15, 64, EdgeKind.ALIGHT, "6")
+                    .walkEdge(15, 16, 487, 584)
+                    .build();
+            var legs = route(g, 10, 16).legs();
+
+            assertThat(legs.stream().map(Leg::kind))
+                    .containsExactly("BOARD", "SUBWAY", "TRANSFER", "SUBWAY", "WALK");
+            assertThat(legs.get(2).label()).isEqualTo("6호선");   // 타려는 노선
+            assertThat(legs.get(2).seconds()).isEqualTo(241);
+            assertThat(legs.get(3).seconds()).isEqualTo(240);     // 주행만
+            assertThat(legs.get(4).seconds()).isEqualTo(64 + 487); // 올라오기는 도보에
+            assertThat(route(g, 10, 16).transfers()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("대합실로 나갔다 다시 타도 환승으로 보인다 — 공덕 5→6호선은 이쪽이 1초 쌌다")
+        void reboardingViaConcourseIsATransfer() {
+            var g = TestGraphs.builder()
+                    .route(TransitMode.SUBWAY, "5", "5호선")
+                    .route(TransitMode.SUBWAY, "6", "6호선")
+                    .stop(10, TransitMode.SUBWAY, "화곡")
+                    .platform(11, TransitMode.SUBWAY, "5", "화곡")
+                    .platform(12, TransitMode.SUBWAY, "5", "공덕")
+                    .stop(13, TransitMode.SUBWAY, "공덕")
+                    .platform(14, TransitMode.SUBWAY, "6", "공덕")
+                    .platform(15, TransitMode.SUBWAY, "6", "삼각지")
+                    .edge(10, 11, 202, EdgeKind.BOARD, "5")
+                    .edge(11, 12, 1350, EdgeKind.RIDE, "5")
+                    .edge(12, 13, 30, EdgeKind.ALIGHT, "5")
+                    .edge(13, 14, 210, EdgeKind.BOARD, "6")
+                    .edge(14, 15, 240, EdgeKind.RIDE, "6")
+                    .build();
+            var legs = route(g, 10, 15).legs();
+            assertThat(legs.stream().map(Leg::kind))
+                    .containsExactly("BOARD", "SUBWAY", "TRANSFER", "SUBWAY");
+            assertThat(legs.get(2).seconds()).isEqualTo(30 + 210);  // 올라오기 + 다시 타기
         }
     }
 

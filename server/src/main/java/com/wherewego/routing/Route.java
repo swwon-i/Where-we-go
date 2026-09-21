@@ -26,7 +26,7 @@ public record Route(int totalSeconds, List<Leg> legs) {
     /** 총 도보 거리(m). */
     @JsonProperty("walkDistanceM")
     public double walkDistanceM() {
-        return Math.round(legs.stream().filter(l -> !l.isRide()).mapToDouble(Leg::distanceM).sum()
+        return Math.round(legs.stream().filter(Leg::isWalk).mapToDouble(Leg::distanceM).sum()
                         * 10)
                 / 10.0;
     }

@@ -193,6 +193,8 @@ table.matrix th.place { background: var(--bg); font-size: 13px; max-width: 160px
 }
 .kind.subway { border-color: var(--accent); color: var(--accent); }
 .kind.bus { border-color: var(--bad); color: var(--bad); }
+.kind.board, .kind.transfer { border-style: dashed; color: var(--muted); }
+.legs li.wait { color: var(--muted); }
 
 /* ── 초대 코드 ────────────────────────────────────────────────────────── */
 .invite { color: var(--muted); font-size: 12px; }

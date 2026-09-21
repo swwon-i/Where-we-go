@@ -220,6 +220,10 @@ function minutes(seconds) {
   return m >= 60 ? `${Math.floor(m / 60)}시간 ${m % 60}분` : `${m}분`;
 }
 
+/**
+ * 경로 구간. 기다리는 일(승차·환승)은 탈것 줄과 따로 보인다 — 탈것 줄은 주행만 담는다.
+ * 예전에는 "6호선 2정차 10분"처럼 환승 4분이 노선 줄 안에 숨어 있었다.
+ */
 function legs(route) {
   if (!route.reachable) return notice('이 경로는 닿지 않습니다.', 'bad');
   return `
@@ -227,16 +231,26 @@ function legs(route) {
       <div class="legs-head">${esc(route.summary)}</div>
       <ol>
         ${route.legs.map((l) => `
-          <li>
+          <li class="${WAITS[l.kind] ? 'wait' : ''}">
             <span class="kind ${l.kind.toLowerCase()}">${label(l.kind)}</span>
             <b>${esc(l.label ?? '')}</b>
             ${l.stops ? `<span class="meta">${l.stops}정차</span>` : ''}
             ${l.kind === 'WALK' ? `<span class="meta">${Math.round(l.distanceM)}m</span>` : ''}
             <span class="meta">${minutes(l.seconds)}</span>
-            ${l.toName ? `<span class="meta">→ ${esc(l.toName)}</span>` : ''}
+            ${WAITS[l.kind]
+              ? `<span class="meta">· ${esc(l.toName ?? '')} · ${WAITS[l.kind]}</span>`
+              : (l.toName ? `<span class="meta">→ ${esc(l.toName)}</span>` : '')}
           </li>`).join('')}
       </ol>
     </div>`;
 }
 
-const label = (kind) => ({ WALK: '도보', SUBWAY: '지하철', BUS: '버스' })[kind] ?? kind;
+/** 기다리는 줄에 무엇이 들어 있는지. 시간대를 바꾸면 여기가 달라진다. */
+const WAITS = {
+  BOARD: '승강장까지 + 대기',
+  TRANSFER: '갈아타기 + 대기',
+};
+
+const label = (kind) => ({
+  WALK: '도보', SUBWAY: '지하철', BUS: '버스', BOARD: '승차', TRANSFER: '환승',
+})[kind] ?? kind;
