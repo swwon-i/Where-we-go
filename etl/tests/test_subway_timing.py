@@ -43,7 +43,7 @@ def frame(rows: list[dict]) -> pd.DataFrame:
 class TestParseHms:
     @pytest.mark.parametrize(
         "raw,expected",
-        [("00:00:00", 0), ("01:02:03", 3723), ("12:53:30", 46_410), ("23:59:59", 86_399)],
+        [("00:00:01", 1), ("01:02:03", 3723), ("12:53:30", 46_410), ("23:59:59", 86_399)],
     )
     def test_normal(self, raw, expected):
         assert parse_hms(raw) == expected
@@ -60,6 +60,12 @@ class TestParseHms:
     @pytest.mark.parametrize("raw", [None, "", "  ", float("nan"), "12:30", "ab:cd:ef"])
     def test_invalid(self, raw):
         assert np.isnan(parse_hms(raw))
+
+    def test_midnight_sentinel_is_missing(self):
+        """원본은 빈 시각 자리에 `00:00:00` 을 넣는다. 자정 이후는 `24:xx` 로 적으므로
+        이 값은 실제 시각이 아니다. 평일 1호선 급행 도착 시각의 35% 가 이 값이었다."""
+        assert np.isnan(parse_hms("00:00:00"))
+        assert np.isnan(parse_hms(" 00:00:00 "))
 
 
 class TestNormalizeStation:
@@ -100,6 +106,22 @@ class TestInterStationTimes:
         ]))
         # 강남 출발 19:00:30 → 선릉 출발 19:04:30 = 240초
         assert legs["run_sec"].sum() == 240
+
+    def test_missing_arrival_does_not_reorder_stops(self):
+        """도착이 `00:00:00`(빈칸)인 역이 열차 순서 맨 앞으로 끌려가면 앞뒤 역이
+        건너뛰는 구간으로 이어진다. 출발 시각으로 채워 제자리에 둬야 한다."""
+        df = frame([
+            {"LINE": "1", "INOUTTAG": "DOWN", "TRAIN_NO": "K1", "SI_ID": "A",
+             "STATION_NM": "금정", "STT": "07:00:00", "EDT": "07:00:30"},
+            {"LINE": "1", "INOUTTAG": "DOWN", "TRAIN_NO": "K1", "SI_ID": "B",
+             "STATION_NM": "군포", "STT": "00:00:00", "EDT": "07:03:00"},
+            {"LINE": "1", "INOUTTAG": "DOWN", "TRAIN_NO": "K1", "SI_ID": "C",
+             "STATION_NM": "의왕", "STT": "07:05:30", "EDT": "07:06:00"},
+        ])
+        # load_timetable 과 같은 채움
+        df["arrive_sec"] = df["arrive_sec"].fillna(df["depart_sec"])
+        pairs = {(r.from_station, r.to_station) for r in inter_station_times(df).itertuples()}
+        assert pairs == {("금정", "군포"), ("군포", "의왕")}
 
     def test_does_not_link_across_trains(self):
         """다른 열차의 정차를 이으면 역간 시간이 엉뚱해진다."""
@@ -225,6 +247,27 @@ class TestHeadways:
         # 완행 노선에 건너뛰는 구간이 생기면 안 된다
         assert ("9", "고속터미널", "동작") not in pairs
 
+
+    def test_sparse_service_still_has_headway(self):
+        """한 시간에 한 대꼴인 노선. 시간대로 먼저 자르면 각 시간대에 열차가 하나뿐이라
+        간격이 안 생긴다(1호선 급행 덕정). 하루 전체에서 재고 뒤 열차의 시간대에 배정한다."""
+        rows = [
+            {"LINE": "1", "INOUTTAG": "DOWN", "TRAIN_NO": f"K{i}", "SI_ID": "S",
+             "STATION_NM": "덕정", "GUBHANG": "1", "STT": f"{7 + i:02d}:10:00", "EDT": f"{7 + i:02d}:10:30"}
+            for i in range(4)
+        ]
+        at9 = headways(frame(rows), hour=9)
+        assert len(at9) == 1
+        assert at9.iloc[0]["headway_sec"] == 3600
+
+    def test_first_train_of_hour_keeps_its_gap(self):
+        """8:58 다음 9:02 — 9시대 첫 열차의 간격은 4분이다. 시간대로 먼저 자르면 이 표본이 사라진다."""
+        rows = [
+            {"LINE": "2", "INOUTTAG": "IN", "TRAIN_NO": f"T{i}", "SI_ID": "S", "STATION_NM": "강남",
+             "GUBHANG": "0", "STT": t, "EDT": t}
+            for i, t in enumerate(["08:58:00", "09:02:00"])
+        ]
+        assert headways(frame(rows), hour=9).iloc[0]["headway_sec"] == 240
 
     def test_hour_filter(self, branching_line):
         assert headways(branching_line, hour=9).empty

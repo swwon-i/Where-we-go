@@ -104,12 +104,23 @@ REFERENCE_MAX_RATIO = 2.0
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+#: 원본이 빈 시각 자리에 넣어 둔 값. 실제 시각이 아니다.
+#:
+#: 이 시각표는 자정 이후를 `24:xx`·`25:xx` 로 적는다(4,315행). `00:01`~`00:59` 는 한 행도 없고,
+#: `00:00:00` 인 칸의 반대편 시각이 `00:00:00` 인 행도 없다. 진짜 자정 정차라면 둘 다 0시
+#: 근처여야 한다. 평일 1호선 급행 도착 시각의 35%(2,835행)가 이 값이다.
+#:
+#: 0초로 읽으면 그 역이 열차 순서 맨 앞으로 정렬되어 앞뒤 역이 **건너뛰는 구간으로 이어진다.**
+MISSING_TIME = "00:00:00"
+
+
 def parse_hms(value: object) -> float:
     """`HH:MM:SS` 를 자정 이후 초로. 영업일 기준이라 24시를 넘는 값이 실제로 있다.
 
     원본 최대값이 `25:14:00` 이다. `datetime.time` 으로 파싱하면 그대로 깨진다.
+    `00:00:00` 은 빈칸으로 본다(MISSING_TIME 참조).
     """
-    if not isinstance(value, str):
+    if not isinstance(value, str) or value.strip() == MISSING_TIME:
         return np.nan
     parts = value.strip().split(":")
     if len(parts) != 3:
@@ -227,14 +238,16 @@ def headways(df: pd.DataFrame, hour: int | None = None) -> pd.DataFrame:
     분기 목적지에 따라 실제 대기가 더 길어질 수 있다는 한계는 README 에 적는다 —
     정확히 다루려면 경로 의존 모델이 필요하고 이 프로젝트의 범위를 넘는다.
     """
-    sub = df
-    if hour is not None:
-        sub = sub[(sub["arrive_sec"] >= hour * 3600) & (sub["arrive_sec"] < (hour + 1) * 3600)]
-
-    ordered = sub.sort_values(["line_key", "SI_ID", "INOUTTAG", "arrive_sec"])
+    # 간격은 **하루 전체**에서 잰 뒤, 뒤 열차의 도착 시간대에 배정한다. 시간대로 먼저 자르면
+    # 각 시간대의 첫 열차가 앞 열차를 잃고, 한 시간에 한 대꼴인 노선(1호선 급행 덕정 등)은
+    # 표본이 아예 안 생겨 근거 없는 폴백으로 떨어진다.
+    ordered = df.sort_values(["line_key", "SI_ID", "INOUTTAG", "arrive_sec"])
     gap = ordered.groupby(["line_key", "SI_ID", "INOUTTAG"], sort=False)["arrive_sec"].diff()
     ordered = ordered.assign(gap_sec=gap).dropna(subset=["gap_sec"])
     ordered = ordered[ordered["gap_sec"].between(HEADWAY_MIN_SEC, HEADWAY_MAX_SEC)]
+    if hour is not None:
+        at = ordered["arrive_sec"]
+        ordered = ordered[(at >= hour * 3600) & (at < (hour + 1) * 3600)]
 
     out = (
         ordered.groupby(["line_key", "SI_ID", "STATION_NM", "INOUTTAG"])

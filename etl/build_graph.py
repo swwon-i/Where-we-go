@@ -91,8 +91,16 @@ TRANSFER_FALLBACK_SEC = 180
 #: 타는, 분리하기 전과 똑같은 경로가 다시 생긴다.
 EXPRESS_TRANSFER_SEC = 30
 
-#: 배차 데이터가 없는 노선·시간대에 쓸 대기(초). 막차 이후 등으로 표본이 없을 때.
-BOARD_FALLBACK_SEC = 300
+#: 배차를 모르는 노선·승강장에 대기를 지어내지 않는다. 예전에는 BOARD_FALLBACK_SEC(300초,
+#: 배차 10분 가정)를 붙였는데 근거가 없었고, 실제로 그 값을 받던 곳은 두 부류뿐이었다.
+#:
+#:   버스 4개 노선      새벽A148·A160·A504·A741. 배차간격 0, 첫차=막차=03:30 — 하루 1회 운행
+#:   지하철 41개 승강장  시각표의 `00:00:00` 빈칸을 자정으로 읽고, 배차를 시간대 안에서만
+#:                     재서 생긴 결측(subway_timing.MISSING_TIME, headways 참조)
+#:
+#: 둘 다 고치고 나면 폴백이 필요한 곳이 없다. 앞으로 생기면 그 노선·승강장은 **태우지 않고
+#: 세어서 보고한다.** 모르는 값을 5분으로 채우면 하루 한 대 다니는 노선이 5분마다 오는
+#: 노선이 된다 — 없는 편이 덜 틀린다.
 
 #: 승강장 ↔ 대합실 이동시간을 환승 소요시간의 몇 배로 볼 것인가.
 #:
@@ -169,7 +177,8 @@ def board_weights_by_hour(headways: pd.DataFrame) -> dict[tuple[str, str], list[
     """(호선, 역명) → 시간대별 대기시간 24개.
 
     대기는 배차의 절반으로 본다 — 언제 도착할지 모르고 오면 평균적으로 그렇다.
-    표본이 없는 시간대는 앞뒤 값으로 메우고, 그래도 없으면 기본값을 쓴다.
+    표본이 없는 시간대는 앞뒤 값으로 메운다. 표본이 하나도 없는 승강장은 여기 키가 없고,
+    BOARD 를 만들지 않는다(insert_board_alight_edges).
 
     방향(상/하행)은 합친다. 플랫폼 노드가 (역 × 노선) 이라 방향을 나누지 않기 때문이다 —
     나누면 노드가 배로 늘고, 배차는 방향별 차이가 크지 않다.
@@ -181,7 +190,8 @@ def board_weights_by_hour(headways: pd.DataFrame) -> dict[tuple[str, str], list[
         series = pd.Series(
             [per_hour.get(h, np.nan) for h in range(24)], index=range(24), dtype=float
         )
-        filled = series.ffill().bfill().fillna(BOARD_FALLBACK_SEC * 2)
+        # 키가 있다는 것은 표본이 한 시간대라도 있다는 뜻이라 앞뒤로 채우면 빈칸이 남지 않는다.
+        filled = series.ffill().bfill()
         out[(line, key)] = [max(1, round(v / 2)) for v in filled]
     return out
 
@@ -438,25 +448,29 @@ def insert_board_alight_edges(
     conn, build_id: int, platform: dict, stop_node: dict, waits: dict,
     traverse: dict[str, int], traverse_default: int,
 ) -> tuple[int, int]:
-    """STOP → PLATFORM(BOARD)와 그 반대(ALIGHT).
+    """STOP → PLATFORM(BOARD)와 그 반대(ALIGHT). `(BOARD 수, ALIGHT 수, 배차 몰라 뺀 승강장 수)`.
 
     양쪽 모두 **승강장 ↔ 대합실 이동시간**을 낸다. BOARD 에는 거기에 대기가 더 붙는다.
     이 이동시간이 없으면 정류장을 거쳐 노선을 바꾸는 쪽이 환승 통로보다 싸져
     실측 환승 도보시간이 무시된다.
+
+    배차를 모르는 승강장에는 BOARD 를 만들지 않는다(대기를 지어내지 않는다). 내리는 것은 된다.
     """
+    unpriced = 0
+
     def board_rows():
+        nonlocal unpriced
         for (key, line), pid in platform.items():
             sid = stop_node.get(key)
             if sid is None:
                 continue
-            walk = traverse.get(key, traverse_default)
             hours = waits.get((line, key))
-            base = walk + (hours[8] if hours else BOARD_FALLBACK_SEC)
-            arr = (
-                "{" + ",".join(str(walk + v) for v in hours) + "}"
-                if hours else "{" + ",".join([str(base)] * 24) + "}"
-            )
-            yield (build_id, sid, pid, "BOARD", base, arr, line)
+            if not hours:
+                unpriced += 1
+                continue
+            walk = traverse.get(key, traverse_default)
+            arr = "{" + ",".join(str(walk + v) for v in hours) + "}"
+            yield (build_id, sid, pid, "BOARD", walk + hours[8], arr, line)
 
     def alight_rows():
         for (key, line), pid in platform.items():
@@ -476,7 +490,7 @@ def insert_board_alight_edges(
             ["build_id", "from_node_id", "to_node_id", "kind", "weight_sec", "line"],
             alight_rows(),
         )
-    return b, a
+    return b, a, unpriced
 
 
 def insert_transfer_edges(
@@ -517,14 +531,13 @@ def insert_transfer_edges(
                         walk = TRANSFER_FALLBACK_SEC
                         fallback += 1
                 wait_hours = waits.get((b, key))
-                wait = wait_hours[8] if wait_hours else BOARD_FALLBACK_SEC
-                arr = (
-                    "{" + ",".join(str(walk + w) for w in wait_hours) + "}"
-                    if wait_hours else None
-                )
+                if not wait_hours:
+                    # 갈아탈 노선의 배차를 모르면 BOARD 와 마찬가지로 태우지 않는다.
+                    continue
+                arr = "{" + ",".join(str(walk + w) for w in wait_hours) + "}"
                 rows.append(
                     (build_id, platform[(key, a)], platform[(key, b)],
-                     "TRANSFER", walk + wait, arr, b)
+                     "TRANSFER", walk + wait_hours[8], arr, b)
                 )
 
     with conn.cursor() as cur:
@@ -625,6 +638,19 @@ def load_bus_headways(headway_path, route_id_path, weektag: str) -> dict[str, in
     merged["sec"] = pd.to_numeric(merged["배차간격"], errors="coerce") * 60
     ok = merged.dropna(subset=["sec"])
     return {str(r.ROUTEID): int(r.sec) for r in ok.itertuples() if r.sec > 0}
+
+
+def split_unpriced_routes(
+    sections: pd.DataFrame, headways: dict[str, int]
+) -> tuple[pd.DataFrame, list[str]]:
+    """배차를 모르는 노선을 구간에서 떼어낸다. `(남길 구간, 뺀 노선_ID 목록)`.
+
+    대기를 매길 수 없는 노선은 그래프에 넣지 않는다(BOARD_FALLBACK_SEC 를 지운 이유 참조).
+    지금 데이터에서는 새벽 자율주행 4개 노선이다 — 배차간격 0, 하루 1회(03:30).
+    """
+    has = sections["노선_ID"].isin(headways.keys())
+    dropped = sorted(sections.loc[~has, "노선_ID"].unique())
+    return sections[has].reset_index(drop=True), dropped
 
 
 def insert_bus_nodes_edges(
@@ -751,17 +777,13 @@ def insert_bus_nodes_edges(
         )
 
         # BOARD / ALIGHT — 정류장이 곧 길가라 대합실 이동이 없다.
-        missing = 0
+        # 배차 없는 노선은 split_unpriced_routes 에서 이미 뺐다.
         rows_b, rows_a = [], []
         for (sid, line), pid in platform.items():
             nid = stop_node.get(sid)
             if nid is None:
                 continue
-            headway = headways.get(line)
-            if headway is None:
-                headway = BOARD_FALLBACK_SEC * 2
-                missing += 1
-            wait = max(1, round(headway / 2))
+            wait = max(1, round(headways[line] / 2))
             rows_b.append((build_id, nid, pid, "BOARD", wait, line))
             rows_a.append((build_id, pid, nid, "ALIGHT", 1, line))
 
@@ -773,7 +795,6 @@ def insert_bus_nodes_edges(
             cur, "graph_edge",
             ["build_id", "from_node_id", "to_node_id", "kind", "weight_sec", "line"], rows_a,
         )
-        stats["headway_missing"] = missing
 
     return stats
 
@@ -931,13 +952,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  승강장↔대합실 {len(traverse)}역 실측 · 나머지 {traverse_default}초", flush=True)
 
             er = insert_ride_edges(conn, build_id, legs, platform)
-            eb, ealight = insert_board_alight_edges(
+            eb, ealight, unpriced = insert_board_alight_edges(
                 conn, build_id, platform, stop_node, waits, traverse, traverse_default
             )
             et, fallback = insert_transfer_edges(
                 conn, build_id, stations, platform, transfers, waits
             )
             print(f"  RIDE {er:,} · BOARD {eb:,} · ALIGHT {ealight:,} · TRANSFER {et:,}", flush=True)
+            if unpriced:
+                print(f"  ⚠ 배차를 몰라 승차를 막은 승강장 {unpriced}개", flush=True)
 
             bus_routes = None
             if not args.no_bus:
@@ -947,11 +970,15 @@ def main(argv: list[str] | None = None) -> int:
                 bus_headways = load_bus_headways(
                     args.bus_headways, args.bus_route_ids, args.weektag
                 )
+                sections, unpriced_routes = split_unpriced_routes(sections, bus_headways)
                 bs = insert_bus_nodes_edges(conn, build_id, sections, bus_headways)
                 print(f"  버스 정류장 {bs['stops']:,} · 플랫폼 {bs['platforms']:,} · "
                       f"RIDE {bs['ride']:,} · BOARD {bs['board']:,}", flush=True)
                 print(f"    구간 {bs['sections']:,} (좌표 없어 제외 {bs['sections_dropped']:,}) · "
-                      f"배차 미상 노선 {bs['headway_missing']:,}", flush=True)
+                      f"배차 없어 뺀 노선 {len(unpriced_routes)}", flush=True)
+                if unpriced_routes:
+                    names = bus_routes.set_index("노선_ID")["노선_명칭"]
+                    print("      " + ", ".join(names.get(r, r) for r in unpriced_routes), flush=True)
                 er += bs["ride"]
                 eb += bs["board"]
                 ealight += bs["alight"]
