@@ -69,9 +69,27 @@ class TestInterStationTimes:
              "STATION_NM": "역삼", "STT": "19:02:00", "EDT": "19:02:30"},
         ]))
         assert len(legs) == 1
-        assert legs.iloc[0]["run_sec"] == 90  # 19:02:00 - 19:00:30
+        # 출발 → 다음 역 출발. 19:02:30 - 19:00:30 = 주행 90초 + 역삼 정차 30초
+        assert legs.iloc[0]["run_sec"] == 120
         assert legs.iloc[0]["from_station"] == "강남"
         assert legs.iloc[0]["to_station"] == "역삼"
+
+    def test_chained_legs_keep_dwell_time(self):
+        """이어 붙인 합이 실제 소요시간과 맞아야 한다 — 중간 역 정차가 빠지면 안 된다.
+
+        주행시간만 재면 역삼 정차 30초가 사라져 210초로 나온다. 정차가 30초인 17정차짜리
+        경로에서는 8분이 없어진다.
+        """
+        legs = inter_station_times(frame([
+            {"LINE": "2", "INOUTTAG": "UP", "TRAIN_NO": "T1", "SI_ID": "A",
+             "STATION_NM": "강남", "STT": "19:00:00", "EDT": "19:00:30"},
+            {"LINE": "2", "INOUTTAG": "UP", "TRAIN_NO": "T1", "SI_ID": "B",
+             "STATION_NM": "역삼", "STT": "19:02:00", "EDT": "19:02:30"},
+            {"LINE": "2", "INOUTTAG": "UP", "TRAIN_NO": "T1", "SI_ID": "C",
+             "STATION_NM": "선릉", "STT": "19:04:00", "EDT": "19:04:30"},
+        ]))
+        # 강남 출발 19:00:30 → 선릉 출발 19:04:30 = 240초
+        assert legs["run_sec"].sum() == 240
 
     def test_does_not_link_across_trains(self):
         """다른 열차의 정차를 이으면 역간 시간이 엉뚱해진다."""

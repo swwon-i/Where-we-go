@@ -2,7 +2,7 @@
 
     서울교통공사_도시철도열차운행시각표.csv  (532,832행 / 1~9호선)
         │
-        ├─▶ 역간 소요시간   (LINE, INOUTTAG, TRAIN_NO) 로 묶어 연속 역의 시각 차
+        ├─▶ 역간 소요시간   (LINE, INOUTTAG, TRAIN_NO) 로 묶어 연속 역의 출발 시각 차
         └─▶ 시간대별 배차   (SI_ID, INOUTTAG) 로 묶어 연속 열차의 도착 시각 차
 
 2주차 그래프 빌드의 입력이다. 기존 「역간거리 및 소요시간」 파일은 1~8호선 표준값인 반면
@@ -35,7 +35,7 @@ STATION_MASTER_PATH = "csv/지하철/서울시 역사마스터 정보.csv"
 #: 주중(DAY) / 토요일(SAT) / 일요일·공휴일(END)
 WEEKTAGS = ("DAY", "SAT", "END")
 
-#: 역간 주행시간으로 인정할 범위(초). 이 밖은 회차·주박 등 운행 외 구간으로 보고 버린다.
+#: 역간 구간시간(주행 + 도착역 정차)으로 인정할 범위(초). 이 밖은 회차·주박 등 운행 외 구간이다.
 RUN_MIN_SEC, RUN_MAX_SEC = 1, 1_800
 #: 배차로 인정할 범위(초). 1시간을 넘으면 운행 종료 구간이다.
 HEADWAY_MIN_SEC, HEADWAY_MAX_SEC = 1, 3_600
@@ -137,21 +137,32 @@ def load_timetable(path: str | Path, weektag: str | None = "DAY") -> pd.DataFram
 
 
 def inter_station_times(df: pd.DataFrame) -> pd.DataFrame:
-    """역간 소요시간 — 같은 열차가 다음 역에 도착할 때까지 걸린 시간.
+    """역간 소요시간 — 같은 열차가 이 역을 떠나 다음 역을 떠날 때까지 걸린 시간.
 
     `TRAIN_NO` 로 열차를 특정하고 시각순으로 정렬해 연속한 두 역을 잇는다.
     같은 구간이 하루에 여러 번 나오므로 중앙값을 쓴다.
+
+    **출발 → 다음 역 출발**이다. 주행시간만 재면(다음 역 *도착* − 이 역 출발) 이어 붙였을 때
+    중간 역의 정차가 통째로 사라진다. A→B→C 를 더하면 `(B도착−A출발) + (C도착−B출발)` 이 되어
+    `B출발−B도착`, 즉 B 에 서 있던 시간이 빠진다. 정차 중앙값은 1~9호선 전부 30초이고
+    17정차짜리 경로에서는 8분이 없어진다 — 화곡→종로3가가 시각표 실측 31.2분인데
+    23.8분으로 나왔다. 다음 역 *출발*을 기준으로 잡으면 각 엣지가 그 역의 정차를 품게 되어
+    이어 붙일 때 자동으로 누적된다(같은 경로 31.7분).
+
+    남는 오차는 **하차역 정차 30초**다. 마지막 엣지가 목적지의 정차까지 포함하는데 승객은
+    그만큼 서 있지 않는다. 정차를 엣지가 아니라 노드 비용으로 옮기면 없앨 수 있지만
+    그래프 구조를 바꿔야 하고, 경로 길이와 무관한 고정 30초라 그대로 둔다.
     """
     ordered = df.sort_values(["LINE", "INOUTTAG", "TRAIN_NO", "arrive_sec"])
     grouped = ordered.groupby(["LINE", "INOUTTAG", "TRAIN_NO"], sort=False)
 
     ordered = ordered.assign(
-        next_arrive=grouped["arrive_sec"].shift(-1),
+        next_depart=grouped["depart_sec"].shift(-1),
         next_station=grouped["STATION_NM"].shift(-1),
         next_si_id=grouped["SI_ID"].shift(-1),
     )
-    legs = ordered.dropna(subset=["next_arrive"]).copy()
-    legs["run_sec"] = legs["next_arrive"] - legs["depart_sec"]
+    legs = ordered.dropna(subset=["next_depart"]).copy()
+    legs["run_sec"] = legs["next_depart"] - legs["depart_sec"]
     legs = legs[legs["run_sec"].between(RUN_MIN_SEC, RUN_MAX_SEC)]
 
     out = (
@@ -276,7 +287,7 @@ def _report(legs: pd.DataFrame, by_hour: pd.DataFrame, check: pd.DataFrame,
 
     print("[역간 소요시간]")
     print(f"  고유 구간 {len(legs):,}")
-    print(f"  주행(초)  중앙 {legs['run_sec'].median():.0f} · "
+    print(f"  구간(초)  중앙 {legs['run_sec'].median():.0f} · "
           f"5% {legs['run_sec'].quantile(.05):.0f} · 95% {legs['run_sec'].quantile(.95):.0f}")
     per_line = legs.groupby("line").size().to_dict()
     print(f"  호선별    {per_line}")

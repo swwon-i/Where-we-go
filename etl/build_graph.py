@@ -389,7 +389,12 @@ def insert_transit_nodes(
 
 
 def insert_ride_edges(conn, build_id: int, legs: pd.DataFrame, platform: dict) -> int:
-    """역간 소요시간 → RIDE. 플랫폼이 (역명 × 노선) 이라 방향별 구간을 합친다."""
+    """역간 소요시간 → RIDE. 플랫폼이 (역명 × 노선) 이라 방향별 구간을 합친다.
+
+    `run_sec` 은 "이 역 출발 → 다음 역 출발"이라 **도착역 정차시간을 품고 있다**
+    (`subway_timing.inter_station_times`). 이어 붙였을 때 중간 역 정차가 누적되도록
+    일부러 그렇게 잡은 값이므로 여기서 빼지 않는다.
+    """
     keyed = legs.assign(
         a=legs["from_station"].map(normalize_station),
         b=legs["to_station"].map(normalize_station),
