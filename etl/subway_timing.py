@@ -35,6 +35,17 @@ STATION_MASTER_PATH = "csv/지하철/서울시 역사마스터 정보.csv"
 #: 주중(DAY) / 토요일(SAT) / 일요일·공휴일(END)
 WEEKTAGS = ("DAY", "SAT", "END")
 
+#: 급행을 별도 노선으로 떼어낼 때 붙이는 꼬리표. `GUBHANG` 이 '0' 이 아니면 급행이다.
+#:
+#: 떼어내지 않으면 급행이 건너뛴 구간(고속터미널→동작 215초, 4역 건너뜀)이 완행 구간
+#: (고속터미널→신반포 105초)과 **같은 플랫폼 노드**에 붙는다. 그러면 완행 배차로 기다린 뒤
+#: 급행처럼 건너뛰고, 급행↔완행 전환도 공짜인 경로가 만들어진다. 실제로 그 탓에
+#: 강남→홍대입구가 2호선 직결 대신 9호선 급행 3회 환승으로 나왔다.
+#:
+#: 노선을 나누면 플랫폼이 쪼개져 (1) 급행은 급행 배차로 기다리고 (2) 급행↔완행 전환이
+#: TRANSFER 비용을 물게 된다. 급행을 버리지 않고 제값에 태우는 것이 목적이다.
+EXPRESS_SUFFIX = "급행"
+
 #: 역간 구간시간(주행 + 도착역 정차)으로 인정할 범위(초). 이 밖은 회차·주박 등 운행 외 구간이다.
 RUN_MIN_SEC, RUN_MAX_SEC = 1, 1_800
 #: 배차로 인정할 범위(초). 1시간을 넘으면 운행 종료 구간이다.
@@ -110,6 +121,21 @@ def parse_hms(value: object) -> float:
     return h * 3600 + m * 60 + s
 
 
+def line_key(line: object, gubhang: object) -> str:
+    """(호선, 급행구분) → 그래프가 쓸 노선 식별자. 급행이면 `9급행` 처럼 꼬리표가 붙는다."""
+    return f"{line}{EXPRESS_SUFFIX}" if str(gubhang) != "0" else str(line)
+
+
+def base_line(key: object) -> str:
+    """`9급행` → `9`. 역 좌표·환승 실측값은 급행/완행을 가리지 않으므로 이 값으로 찾는다."""
+    text = str(key)
+    return text[: -len(EXPRESS_SUFFIX)] if text.endswith(EXPRESS_SUFFIX) else text
+
+
+def is_express(key: object) -> bool:
+    return str(key).endswith(EXPRESS_SUFFIX)
+
+
 def normalize_station(name: object) -> str:
     """역명 비교용 정규화 — 괄호 부기역명과 공백을 뗀다."""
     import re
@@ -122,6 +148,9 @@ def load_timetable(path: str | Path, weektag: str | None = "DAY") -> pd.DataFram
 
     시·종착역은 도착 또는 출발 시각이 비어 있다(약 15,000행). 서로 채운 뒤
     둘 다 없는 행만 버린다.
+
+    `line_key` 를 함께 붙인다 — 이후 모든 집계는 `LINE` 이 아니라 이 값으로 묶는다.
+    급행을 별도 노선으로 보기 위해서다(EXPRESS_SUFFIX 주석 참조).
     """
     df = pd.read_csv(path, encoding=TIMETABLE_ENCODING, dtype=str)
     if weektag:
@@ -132,6 +161,7 @@ def load_timetable(path: str | Path, weektag: str | None = "DAY") -> pd.DataFram
     df = df.assign(
         arrive_sec=arrive.fillna(depart),
         depart_sec=depart.fillna(arrive),
+        line_key=[line_key(l, g) for l, g in zip(df["LINE"], df["GUBHANG"])],
     )
     return df.dropna(subset=["arrive_sec", "depart_sec"]).reset_index(drop=True)
 
@@ -152,9 +182,12 @@ def inter_station_times(df: pd.DataFrame) -> pd.DataFrame:
     남는 오차는 **하차역 정차 30초**다. 마지막 엣지가 목적지의 정차까지 포함하는데 승객은
     그만큼 서 있지 않는다. 정차를 엣지가 아니라 노드 비용으로 옮기면 없앨 수 있지만
     그래프 구조를 바꿔야 하고, 경로 길이와 무관한 고정 30초라 그대로 둔다.
+
+    묶는 단위는 `LINE` 이 아니라 `line_key` 다. 급행이 건너뛴 구간은 급행 노선의 구간이지
+    9호선 구간이 아니다 — 섞으면 완행 플랫폼에서 급행처럼 건너뛸 수 있게 된다.
     """
-    ordered = df.sort_values(["LINE", "INOUTTAG", "TRAIN_NO", "arrive_sec"])
-    grouped = ordered.groupby(["LINE", "INOUTTAG", "TRAIN_NO"], sort=False)
+    ordered = df.sort_values(["line_key", "INOUTTAG", "TRAIN_NO", "arrive_sec"])
+    grouped = ordered.groupby(["line_key", "INOUTTAG", "TRAIN_NO"], sort=False)
 
     ordered = ordered.assign(
         next_depart=grouped["depart_sec"].shift(-1),
@@ -166,41 +199,45 @@ def inter_station_times(df: pd.DataFrame) -> pd.DataFrame:
     legs = legs[legs["run_sec"].between(RUN_MIN_SEC, RUN_MAX_SEC)]
 
     out = (
-        legs.groupby(["LINE", "INOUTTAG", "SI_ID", "STATION_NM", "next_si_id", "next_station"])
+        legs.groupby(["line_key", "INOUTTAG", "SI_ID", "STATION_NM", "next_si_id", "next_station"])
         .agg(run_sec=("run_sec", "median"), samples=("run_sec", "size"))
         .reset_index()
     )
     out["run_sec"] = out["run_sec"].round().astype(int)
     return out.rename(
         columns={
-            "LINE": "line", "INOUTTAG": "direction",
+            "line_key": "line", "INOUTTAG": "direction",
             "SI_ID": "from_si_id", "STATION_NM": "from_station",
             "next_si_id": "to_si_id", "next_station": "to_station",
         }
     )
 
 
-def headways(df: pd.DataFrame, hour: int | None = None, local_only: bool = True) -> pd.DataFrame:
-    """배차간격 — 같은 역·같은 방향에 연속으로 들어오는 열차의 시각 차.
+def headways(df: pd.DataFrame, hour: int | None = None) -> pd.DataFrame:
+    """배차간격 — 같은 역·같은 방향·**같은 등급**에 연속으로 들어오는 열차의 시각 차.
 
     **종착지(`ED_STT_NM`)로 더 쪼개지 않는다.** 분기 노선에서 2~4배로 부풀려진다 —
     1호선 8시대가 종착지별로는 13.0분이지만 (역, 방향)만으로는 4.5분이고
     운행현황 실측값은 3분이다. 시청역 가는 승객은 인천행이든 신창행이든 아무 하행이나 탄다.
 
+    **급행과 완행은 쪼갠다.** 둘은 다른 승강장에서 기다리는 다른 열차다. 섞으면 배차가
+    실제보다 짧아 보인다 — 완행끼리 6분인 역에 급행 한 대가 끼면 3분으로 나온다.
+    `line_key` 로 묶는 것이 그 구분이며, 이 함수가 급행 노선의 배차도 함께 돌려준다.
+
     분기 목적지에 따라 실제 대기가 더 길어질 수 있다는 한계는 README 에 적는다 —
     정확히 다루려면 경로 의존 모델이 필요하고 이 프로젝트의 범위를 넘는다.
     """
-    sub = df[df["GUBHANG"] == "0"] if local_only else df
+    sub = df
     if hour is not None:
         sub = sub[(sub["arrive_sec"] >= hour * 3600) & (sub["arrive_sec"] < (hour + 1) * 3600)]
 
-    ordered = sub.sort_values(["SI_ID", "INOUTTAG", "arrive_sec"])
-    gap = ordered.groupby(["SI_ID", "INOUTTAG"], sort=False)["arrive_sec"].diff()
+    ordered = sub.sort_values(["line_key", "SI_ID", "INOUTTAG", "arrive_sec"])
+    gap = ordered.groupby(["line_key", "SI_ID", "INOUTTAG"], sort=False)["arrive_sec"].diff()
     ordered = ordered.assign(gap_sec=gap).dropna(subset=["gap_sec"])
     ordered = ordered[ordered["gap_sec"].between(HEADWAY_MIN_SEC, HEADWAY_MAX_SEC)]
 
     out = (
-        ordered.groupby(["LINE", "SI_ID", "STATION_NM", "INOUTTAG"])
+        ordered.groupby(["line_key", "SI_ID", "STATION_NM", "INOUTTAG"])
         .agg(headway_sec=("gap_sec", "median"), samples=("gap_sec", "size"))
         .reset_index()
     )
@@ -208,7 +245,10 @@ def headways(df: pd.DataFrame, hour: int | None = None, local_only: bool = True)
     if hour is not None:
         out.insert(0, "hour", hour)
     return out.rename(
-        columns={"LINE": "line", "SI_ID": "si_id", "STATION_NM": "station", "INOUTTAG": "direction"}
+        columns={
+            "line_key": "line", "SI_ID": "si_id",
+            "STATION_NM": "station", "INOUTTAG": "direction",
+        }
     )
 
 
@@ -222,8 +262,10 @@ def check_against_reference(by_hour: pd.DataFrame, hour: int = 8) -> pd.DataFram
     """산출한 배차가 운행현황 실측값과 같은 자릿수인지 확인한다.
 
     그룹 기준을 잘못 잡으면(종착지까지 쪼개면) 여기서 배수가 튄다.
+
+    급행은 뺀다 — 운행현황의 시격은 일반 열차 기준이라 비교 대상이 아니다.
     """
-    at_hour = by_hour[by_hour["hour"] == hour]
+    at_hour = by_hour[(by_hour["hour"] == hour) & ~by_hour["line"].map(is_express)]
 
     rows = []
     for line, group in at_hour.groupby("line"):
@@ -260,11 +302,13 @@ def join_station_coords(
     master["key"] = master["line"] + "|" + master["역사명"].map(normalize_station)
     lookup = master.drop_duplicates("key").set_index("key")
 
+    # 좌표는 급행/완행을 가리지 않는다. 같은 역의 같은 자리다 — 기준 호선으로 찾는다.
     stations = stations.copy()
-    aliased = stations.apply(
-        lambda r: STATION_ALIAS.get((r["line"], r["station"]), r["station"]), axis=1
-    )
-    stations["key"] = stations["line"] + "|" + aliased.map(normalize_station)
+    base = stations["line"].map(base_line)
+    aliased = [
+        STATION_ALIAS.get((b, s), s) for b, s in zip(base, stations["station"])
+    ]
+    stations["key"] = base + "|" + pd.Series(aliased, index=stations.index).map(normalize_station)
 
     joined = stations.join(lookup[["위도", "경도"]], on="key")
     joined = joined.rename(columns={"위도": "lat", "경도": "lng"})

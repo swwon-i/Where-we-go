@@ -74,8 +74,14 @@ class RouteIntegrationTest {
                 hour);
     }
 
+    /**
+     * 고르는 기준은 <b>직결이 실제로 최선인 구간</b>이어야 한다. 한 노선으로 이어진다는 것만으로는
+     * 부족하다 — 강남→홍대입구는 2호선으로 이어지지만 순환선 반바퀴(17정차·실측 38.5분)라
+     * 9호선 급행으로 가로지르는 편이 실측 기준 5.6분 빠르다. 그 구간을 "직결이어야 한다"고
+     * 묶어 두면 그래프가 옳아질수록 깨지는 테스트가 된다.
+     */
     @ParameterizedTest(name = "{0} → {1} 은 {2} 한 노선으로, {3}분 안")
-    @CsvSource({"강남,홍대입구,2호선,45", "노원,사당,4호선,55", "건대입구,왕십리,2호선,25"})
+    @CsvSource({"화곡,종로3가,5호선,45", "노원,사당,4호선,60", "건대입구,왕십리,2호선,25"})
     @DisplayName("직결 구간에 불필요한 환승을 만들지 않는다")
     void singleLineHasNoTransfer(String from, String to, String line, int maxMinutes) {
         var route = between(from, to, Dijkstra.NO_HOUR);

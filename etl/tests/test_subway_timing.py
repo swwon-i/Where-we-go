@@ -7,15 +7,19 @@ import pandas as pd
 import pytest
 
 from etl.subway_timing import (
+    EXPRESS_SUFFIX,
     HEADWAY_MAX_SEC,
     LINE_ALIAS,
     REFERENCE_HEADWAY_MIN,
     REFERENCE_MAX_RATIO,
     REFERENCE_SCOPE_STATIONS,
     RUN_MAX_SEC,
+    base_line,
     check_against_reference,
     headways,
     inter_station_times,
+    is_express,
+    line_key,
     join_station_coords,
     normalize_station,
     parse_hms,
@@ -23,10 +27,16 @@ from etl.subway_timing import (
 
 
 def frame(rows: list[dict]) -> pd.DataFrame:
-    """시각표 모양의 최소 DataFrame. 시각은 `HH:MM:SS` 로 준다."""
+    """시각표 모양의 최소 DataFrame. 시각은 `HH:MM:SS` 로 준다.
+
+    `line_key` 는 `load_timetable` 과 같은 방법으로 붙인다 — 급행 분리가 파이프라인
+    전체에 걸려 있어 이것이 빠지면 집계 함수가 실제와 다른 입력을 받는다.
+    """
     df = pd.DataFrame(rows)
     df["arrive_sec"] = df["STT"].map(parse_hms)
     df["depart_sec"] = df.get("EDT", df["STT"]).map(parse_hms)
+    gubhang = df["GUBHANG"] if "GUBHANG" in df else pd.Series("0", index=df.index)
+    df["line_key"] = [line_key(l, g) for l, g in zip(df["LINE"], gubhang)]
     return df
 
 
@@ -173,7 +183,12 @@ class TestHeadways:
         assert gaps.median() == 480  # 종착지별로 보면 8분 — 2배로 부풀려진다
         assert gaps.median() > correct
 
-    def test_express_excluded_by_default(self):
+    def test_express_gets_its_own_headway(self):
+        """급행은 배차를 따로 잰다. 섞으면 완행 배차가 실제보다 짧아 보인다.
+
+        아래 표본에서 완행끼리는 6분인데 급행 한 대를 끼워 함께 재면 3분으로 나온다.
+        급행 승강장에서 기다리는 사람은 완행이 와도 못 타므로 그 3분은 아무의 대기도 아니다.
+        """
         rows = [
             {"LINE": "9", "INOUTTAG": "UP", "TRAIN_NO": "L1", "SI_ID": "S", "STATION_NM": "여의도",
              "GUBHANG": "0", "ED_STT_NM": "종합운동장", "STT": "08:00:00", "EDT": "08:00:30"},
@@ -181,11 +196,35 @@ class TestHeadways:
              "GUBHANG": "1", "ED_STT_NM": "종합운동장", "STT": "08:03:00", "EDT": "08:03:30"},
             {"LINE": "9", "INOUTTAG": "UP", "TRAIN_NO": "L2", "SI_ID": "S", "STATION_NM": "여의도",
              "GUBHANG": "0", "ED_STT_NM": "종합운동장", "STT": "08:06:00", "EDT": "08:06:30"},
+            {"LINE": "9", "INOUTTAG": "UP", "TRAIN_NO": "X2", "SI_ID": "S", "STATION_NM": "여의도",
+             "GUBHANG": "1", "ED_STT_NM": "종합운동장", "STT": "08:11:00", "EDT": "08:11:30"},
         ]
-        local = headways(frame(rows), hour=8).iloc[0]["headway_sec"]
-        mixed = headways(frame(rows), hour=8, local_only=False).iloc[0]["headway_sec"]
-        assert local == 360   # 완행끼리 6분
-        assert mixed == 180   # 급행을 섞으면 3분으로 짧아 보인다
+        out = headways(frame(rows), hour=8).set_index("line")["headway_sec"]
+        assert out["9"] == 360                     # 완행끼리 6분
+        assert out[f"9{EXPRESS_SUFFIX}"] == 480    # 급행끼리 8분 — 더 길다
+
+    def test_express_legs_do_not_leak_into_local_line(self):
+        """급행이 건너뛴 구간은 급행 노선의 구간이지 완행 노선의 구간이 아니다.
+
+        섞이면 완행 승강장에서 완행 배차로 기다린 뒤 급행처럼 건너뛸 수 있게 된다.
+        """
+        rows = [
+            {"LINE": "9", "INOUTTAG": "UP", "TRAIN_NO": "L1", "SI_ID": "A", "STATION_NM": "고속터미널",
+             "GUBHANG": "0", "STT": "08:00:00", "EDT": "08:00:30"},
+            {"LINE": "9", "INOUTTAG": "UP", "TRAIN_NO": "L1", "SI_ID": "B", "STATION_NM": "신반포",
+             "GUBHANG": "0", "STT": "08:02:00", "EDT": "08:02:30"},
+            {"LINE": "9", "INOUTTAG": "UP", "TRAIN_NO": "X1", "SI_ID": "A", "STATION_NM": "고속터미널",
+             "GUBHANG": "1", "STT": "08:10:00", "EDT": "08:10:30"},
+            {"LINE": "9", "INOUTTAG": "UP", "TRAIN_NO": "X1", "SI_ID": "C", "STATION_NM": "동작",
+             "GUBHANG": "1", "STT": "08:13:30", "EDT": "08:14:00"},
+        ]
+        legs = inter_station_times(frame(rows))
+        pairs = {(r.line, r.from_station, r.to_station) for r in legs.itertuples()}
+        assert ("9", "고속터미널", "신반포") in pairs
+        assert (f"9{EXPRESS_SUFFIX}", "고속터미널", "동작") in pairs
+        # 완행 노선에 건너뛰는 구간이 생기면 안 된다
+        assert ("9", "고속터미널", "동작") not in pairs
+
 
     def test_hour_filter(self, branching_line):
         assert headways(branching_line, hour=9).empty
@@ -282,3 +321,15 @@ class TestJoinStationCoords:
     def test_non_numbered_lines_are_ignored(self, master):
         """GTX 등은 역간 소요시간·배차가 없어 그래프에 넣지 않는다."""
         assert "수도권 광역급행철도" not in LINE_ALIAS
+class TestLineKey:
+    def test_local_keeps_plain_line(self):
+        assert line_key("9", "0") == "9"
+        assert not is_express("9")
+
+    def test_express_gets_suffix(self):
+        assert line_key("9", "1") == f"9{EXPRESS_SUFFIX}"
+        assert is_express(f"9{EXPRESS_SUFFIX}")
+
+    def test_base_line_round_trips(self):
+        assert base_line(line_key("1", "1")) == "1"
+        assert base_line("2") == "2"

@@ -36,10 +36,13 @@ import pandas as pd
 
 from etl.db import connect
 from etl.subway_timing import (
+    EXPRESS_SUFFIX,
     STATION_MASTER_PATH,
     TIMETABLE_PATH,
+    base_line,
     headways_by_hour,
     inter_station_times,
+    is_express,
     join_station_coords,
     load_timetable,
     normalize_station,
@@ -72,6 +75,21 @@ WALK_SPEED_MPS = 1.2
 #: 환승 실측값이 없는 쌍에 쓸 값(초). 계획서가 "근거 없는 값"이라 지적한 180초이며,
 #: 실제로 쓰인 비율을 graph_build.transfer_fallback_ratio 에 남긴다.
 TRANSFER_FALLBACK_SEC = 180
+
+#: 같은 역에서 급행 ↔ 완행을 갈아타는 도보시간(초).
+#:
+#: 환승 실측 데이터에는 이 쌍이 없다. 다른 호선으로 갈아타는 것이 아니라 같은 호선 안에서
+#: 열차 등급만 바꾸는 것이기 때문이다. TRANSFER_FALLBACK_SEC(180초)를 그대로 쓰면
+#: 급행이 과도하게 불리해진다 — 9호선 급행 정차역은 대부분 같은 승강장 맞은편이라
+#: 계단을 오르내리지 않는다.
+#:
+#: 승강장 ↔ 대합실 편도(STATION_TRAVERSE_RATIO 로 유도되는 값, 실측 중앙 기준 약 40초)보다
+#: 짧아야 한다는 것이 유일한 근거다. 같은 층에서 건너가는 것이 대합실까지 올라가는 것보다
+#: 쌀 수밖에 없다. 30초로 둔다 — 정차시간 중앙값과 같은 자릿수다.
+#:
+#: 이 값이 0 이면 안 된다. 0 이면 급행/완행을 공짜로 오가며 각 구간에서 빠른 쪽만 골라
+#: 타는, 분리하기 전과 똑같은 경로가 다시 생긴다.
+EXPRESS_TRANSFER_SEC = 30
 
 #: 배차 데이터가 없는 노선·시간대에 쓸 대기(초). 막차 이후 등으로 표본이 없을 때.
 BOARD_FALLBACK_SEC = 300
@@ -468,6 +486,10 @@ def insert_transfer_edges(
 
     가중치는 **환승 도보 + 새 노선 대기** 다. 정류장을 경유하지 않으므로
     BOARD 를 지나지 않고, 따라서 대기가 이중으로 붙지 않는다.
+
+    급행 ↔ 완행도 여기를 지난다. 실측 데이터에 없는 쌍이라 EXPRESS_TRANSFER_SEC 를 쓰고,
+    근거 없는 폴백(TRANSFER_FALLBACK_SEC)과 구분해 세지 않는다 — 값이 없어서 메운 것이
+    아니라 다른 종류의 환승이라 다른 값을 쓰는 것이다.
     """
     lookup = {
         (r.station, r.line_a, r.line_b): int(r.sec) for r in transfers.itertuples()
@@ -485,10 +507,15 @@ def insert_transfer_edges(
             for b in lines:
                 if a == b:
                     continue
-                walk = lookup.get((key, a, b))
-                if walk is None:
-                    walk = TRANSFER_FALLBACK_SEC
-                    fallback += 1
+                if base_line(a) == base_line(b):
+                    # 같은 호선의 급행 ↔ 완행. 호선을 바꾸는 것이 아니라 등급만 바꾼다.
+                    walk = EXPRESS_TRANSFER_SEC
+                else:
+                    # 실측값은 급행/완행을 구분하지 않는다. 기준 호선으로 찾는다.
+                    walk = lookup.get((key, base_line(a), base_line(b)))
+                    if walk is None:
+                        walk = TRANSFER_FALLBACK_SEC
+                        fallback += 1
                 wait_hours = waits.get((b, key))
                 wait = wait_hours[8] if wait_hours else BOARD_FALLBACK_SEC
                 arr = (
@@ -545,6 +572,13 @@ def load_bus_sections(section_path, routes: pd.DataFrame, weektag: str) -> pd.Da
     return sec[sec["노선_ID"].isin(seoul)].reset_index(drop=True)
 
 
+def _subway_route_name(key: str) -> str:
+    """`9` → `9호선`, `9급행` → `9호선 급행`. 화면에 그대로 나가는 이름이다."""
+    base = base_line(key)
+    name = f"{base}호선" if base.isdigit() else base
+    return f"{name} {EXPRESS_SUFFIX}" if is_express(key) else name
+
+
 def insert_transit_routes(conn, bus_routes: pd.DataFrame | None, subway_lines) -> int:
     """`transit_route` 를 채운다. 탐색에는 쓰이지 않고 결과를 읽을 때만 쓴다.
 
@@ -552,7 +586,7 @@ def insert_transit_routes(conn, bus_routes: pd.DataFrame | None, subway_lines) -
     `line` 이 '2' 라 그냥 읽히더라도, 읽는 쪽이 수단마다 다르게 굴면 안 된다.
     """
     rows = [
-        ("SUBWAY", str(l), f"{l}호선" if str(l).isdigit() else str(l), None)
+        ("SUBWAY", str(l), _subway_route_name(str(l)), EXPRESS_SUFFIX if is_express(l) else None)
         for l in sorted(subway_lines)
     ]
     if bus_routes is not None:
@@ -857,15 +891,20 @@ def main(argv: list[str] | None = None) -> int:
     waits = board_weights_by_hour(headways_by_hour(tt))
     transfers = load_transfers(args.transfers)
 
+    # 급행은 별도 노선이므로 급행이 서는 역에만 급행 플랫폼이 생긴다.
     raw_stations = (
-        tt[["LINE", "SI_ID", "STATION_NM"]].drop_duplicates()
-        .rename(columns={"LINE": "line", "SI_ID": "si_id", "STATION_NM": "station"})
+        tt[["line_key", "SI_ID", "STATION_NM"]].drop_duplicates()
+        .rename(columns={"line_key": "line", "SI_ID": "si_id", "STATION_NM": "station"})
     )
     stations, missing = join_station_coords(
         raw_stations, pd.read_csv(args.station_master, encoding="cp949", dtype=str)
     )
+    express_lines = sorted({l for l in stations["line"].unique() if is_express(l)})
     print(f"  역 {len(stations)}개 (좌표 미매칭 {len(missing)} 제외) · "
           f"구간 {len(legs)} · 환승쌍 {len(transfers)}", flush=True)
+    if express_lines:
+        n_ex = int(stations["line"].map(is_express).sum())
+        print(f"  급행 분리: {', '.join(express_lines)} · 급행 정차 {n_ex}개", flush=True)
 
     with connect() as conn:
         if args.reset:
