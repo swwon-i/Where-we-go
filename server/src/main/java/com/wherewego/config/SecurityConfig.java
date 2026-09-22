@@ -108,6 +108,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/places/**", "/api/v1/routes",
                                 "/api/v1/graph", "/api/v1/client-config", "/api/v1/auth/csrf")
                         .permitAll()
+                        // 파이프라인 운영 기록 — 공개 데이터와 통계뿐이고 읽기만 있다.
+                        // 심사자가 로그인 없이 열어 봐야 하는 화면이다
+                        .requestMatchers(HttpMethod.GET, "/api/v1/admin/**").permitAll()
                         // 그래프 재적재는 운영 동작이다
                         .requestMatchers(HttpMethod.POST, "/api/v1/graph/reload").authenticated()
                         .requestMatchers("/api/**").authenticated()

@@ -130,6 +130,13 @@ export const api = {
   search: (params) => request('GET', `/places/search?${new URLSearchParams(params)}`),
 
   clientConfig: () => request('GET', '/client-config'),
+
+  // 파이프라인 운영 기록 — 로그인 없이 읽힌다
+  adminIngestRuns: () => request('GET', '/admin/ingest-runs'),
+  adminValidationSummary: () => request('GET', '/admin/validation-summary'),
+  adminValidationResults: (params) =>
+    request('GET', `/admin/validation-results?${new URLSearchParams(params)}`),
+  adminGraphStats: () => request('GET', '/admin/graph-stats'),
 };
 
 /** 로그아웃하면 토큰도 버린다. 세션이 바뀌면 토큰도 무효다. */

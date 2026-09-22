@@ -14,6 +14,7 @@ import { loginPage, setReturnTo } from './pages/login.js';
 import { roomsPage } from './pages/rooms.js';
 import { roomPage, leaveRoom } from './pages/room.js';
 import { explorePage } from './pages/explore.js';
+import { adminPage } from './pages/admin.js';
 
 /**
  * 로그인이 필요한 화면을 감싼다.
@@ -51,6 +52,8 @@ route('/login', withCleanup(async () => {
 }));
 
 route('/explore', withCleanup(explorePage));
+// 파이프라인 운영 기록. 로그인 없이 열린다 — 심사자가 클론해서 바로 보는 화면이다.
+route('/admin', withCleanup(adminPage));
 route('/rooms', withCleanup(guard(roomsPage)));
 route('/rooms/:roomId', guard(roomPage));
 
