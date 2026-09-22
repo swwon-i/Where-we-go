@@ -445,17 +445,22 @@ def upsert_serving(conn, run_id: int, source_code: str) -> None:
 
 
 def diff_against_previous(conn, run_id: int, prev_run_id: int | None) -> dict[str, int]:
-    """직전 회차와 비교해 신규/유지/소멸을 센다.
+    """직전 회차와 비교해 신규/유지/소멸/폐업 전환을 센다.
 
     `ingest_run` 의 건수 컬럼은 **여기서만** 채워진다 — 영업상태 컬럼만 읽어서는 알 수 없다.
     소멸은 '원본 파일에서 레코드가 사라진 것'이며 폐업과는 다른 사건이다.
+
+    **폐업 전환**은 두 회차에 다 있고 직전엔 영업, 이번엔 폐업인 레코드다. 예전에는 이 칸에
+    "사라져서 폐업 처리한 건수"(`mark_vanished_as_closed`)를 넣고 있었다 — 첫 적재만 있을 땐
+    둘 다 0 이라 드러나지 않았고, 첫 일일 회차(2026-09-22)에서 poi 의 영업 중이 157 줄었는데
+    이 칸이 0 이어서 보였다. 사라진 것은 `vanished` 가 이미 센다.
     """
     if prev_run_id is None:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT count(*) FROM poi_staging WHERE run_id = %s", (run_id,)
             )
-            return {"new": cur.fetchone()[0], "kept": 0, "vanished": 0}
+            return {"new": cur.fetchone()[0], "kept": 0, "vanished": 0, "closed": 0}
 
     with conn.cursor() as cur:
         cur.execute(
@@ -463,16 +468,19 @@ def diff_against_previous(conn, run_id: int, prev_run_id: int | None) -> dict[st
             SELECT
               count(*) FILTER (WHERE p.source_id IS NULL) AS new,
               count(*) FILTER (WHERE c.source_id IS NOT NULL AND p.source_id IS NOT NULL) AS kept,
-              count(*) FILTER (WHERE c.source_id IS NULL) AS vanished
-            FROM (SELECT source_id FROM poi_staging WHERE run_id = %(cur)s) c
+              count(*) FILTER (WHERE c.source_id IS NULL) AS vanished,
+              count(*) FILTER (WHERE p.active AND NOT c.active) AS closed
+            FROM (SELECT source_id, biz_status_name = ANY(%(active)s) AS active
+                  FROM poi_staging WHERE run_id = %(cur)s) c
             FULL OUTER JOIN
-                 (SELECT source_id FROM poi_staging WHERE run_id = %(prev)s) p
+                 (SELECT source_id, biz_status_name = ANY(%(active)s) AS active
+                  FROM poi_staging WHERE run_id = %(prev)s) p
               ON c.source_id = p.source_id
             """,
-            {"cur": run_id, "prev": prev_run_id},
+            {"cur": run_id, "prev": prev_run_id, "active": list(ACTIVE_STATUS_NAMES)},
         )
-        new, kept, vanished = cur.fetchone()
-    return {"new": new, "kept": kept, "vanished": vanished}
+        new, kept, vanished, closed = cur.fetchone()
+    return {"new": new, "kept": kept, "vanished": vanished, "closed": closed}
 
 
 def mark_vanished_as_closed(conn, source_code: str, run_id: int) -> int:
@@ -572,7 +580,7 @@ def ingest_source(conn, source: Source, limit: int | None, force: bool) -> dict:
 
         upsert_categories(conn, run_id)
         upsert_serving(conn, run_id, source.code)
-        closed = mark_vanished_as_closed(conn, source.code, run_id)
+        vanished_closed = mark_vanished_as_closed(conn, source.code, run_id)
         counts = diff_against_previous(conn, run_id, prev_run_id)
 
         keep = [run_id] + ([prev_run_id] if prev_run_id else [])
@@ -590,11 +598,14 @@ def ingest_source(conn, source: Source, limit: int | None, force: bool) -> dict:
             "duration": int((time.monotonic() - t0) * 1000),
             "total": raw_rows, "valid": valid, "rejected": stg_rows - valid,
             "new": counts["new"], "kept": counts["kept"],
-            "vanished": counts["vanished"], "closed": closed,
+            "vanished": counts["vanished"], "closed": counts["closed"],
         })
         conn.commit()
         print(f"   → SUCCESS  유효 {valid:,} / 거절 {stg_rows - valid:,} / "
-              f"신규 {counts['new']:,} · 유지 {counts['kept']:,} · 소멸 {counts['vanished']:,}")
+              f"신규 {counts['new']:,} · 유지 {counts['kept']:,} · 소멸 {counts['vanished']:,} · "
+              f"폐업 전환 {counts['closed']:,}")
+        if vanished_closed:
+            print(f"   원본에서 사라져 폐업 처리 {vanished_closed:,}건 (poi 에서 지우지 않는다)")
         return {"status": "SUCCESS", "run_id": run_id}
 
     except Exception as e:  # noqa: BLE001 — 어떤 실패든 회차에 남기고 serving 은 보존한다

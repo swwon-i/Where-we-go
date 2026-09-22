@@ -8,7 +8,8 @@ rem
 rem Register:  etl\register_daily_task.cmd
 rem Manual:    etl\run_daily.cmd
 rem
-rem Exit codes: 0 ok or skipped, 1 setup problem, other = ingest failure.
+rem Exit codes: 0 ok or skipped, 1 setup problem, 4 fetch failed (ingested old
+rem files), other = ingest failure.
 
 setlocal
 
@@ -37,6 +38,13 @@ if not exist "%PY%" (
     exit /b 1
 )
 
+rem Fetch the source CSVs first. Without this the ingest only re-hashes the
+rem files already in csv/ and every day ends SKIPPED. A failed fetch leaves
+rem the old files in place, so the ingest still runs; the fetch code is kept
+rem and reported at the end.
+"%PY%" -X utf8 -m etl.fetch --source all >> "%LOG%" 2>&1
+set "FETCH=%ERRORLEVEL%"
+
 rem --wait-db 180: a missed run starts the moment the lid opens, before Docker
 rem and WSL are back. Without waiting, the first connect fails and the day's
 rem run is lost looking exactly like "Docker was off".
@@ -50,6 +58,12 @@ rem     recorded. The log line above says how many attempts and seconds it took.
 if "%CODE%"=="3" (
     echo database not reachable - skipped>> "%LOG%"
     set "CODE=0"
+)
+
+rem 4 = the ingest was fine but ran on stale files. Surface it in the scheduler.
+if "%CODE%"=="0" if not "%FETCH%"=="0" (
+    >> "%LOG%" echo fetch failed with %FETCH% - ingested the existing files
+    set "CODE=%FETCH%"
 )
 
 rem Redirect first: "echo ... %CODE%>> file" would read a trailing digit as a

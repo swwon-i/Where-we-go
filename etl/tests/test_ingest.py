@@ -213,3 +213,57 @@ class TestWaitForDb:
         ok, attempts, _, _ = wait_for_db(
             0, 15, connect_fn=flaky_connect(1), sleep=clock.sleep, clock=clock)
         assert not ok and attempts == 1 and clock.slept == []
+
+
+def _db_up() -> bool:
+    import socket
+    try:
+        with socket.create_connection(("localhost", 5432), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not _db_up(), reason="DB 가 없으면 건너뛴다")
+class TestDiffAgainstPrevious:
+    """회차 비교. 실제 DB 에서 두 회차를 만들어 세고, 끝나면 되돌린다."""
+
+    @pytest.fixture
+    def conn(self):
+        from etl.db import connect
+        c = connect()
+        yield c
+        c.rollback()
+        c.close()
+
+    def _run(self, cur, rows):
+        cur.execute("INSERT INTO ingest_run (source) VALUES ('TEST_DIFF') RETURNING id")
+        run_id = cur.fetchone()[0]
+        for source_id, status in rows:
+            cur.execute("INSERT INTO poi_staging (run_id, source_id, biz_status_name) VALUES (%s, %s, %s)",
+                        (run_id, source_id, status))
+        return run_id
+
+    def test_counts_every_kind(self, conn):
+        from etl.ingest import diff_against_previous
+        with conn.cursor() as cur:
+            prev = self._run(cur, [("A", "영업/정상"), ("B", "영업/정상"), ("C", "영업/정상"), ("D", "폐업")])
+            cur_ = self._run(cur, [("A", "영업/정상"), ("B", "폐업"), ("D", "폐업"), ("E", "영업/정상")])
+        got = diff_against_previous(conn, cur_, prev)
+        # A 유지 · B 유지+폐업 전환 · C 소멸 · D 유지(원래 폐업) · E 신규
+        assert got == {"new": 1, "kept": 3, "vanished": 1, "closed": 1}
+
+    def test_vanished_is_not_a_closed_transition(self, conn):
+        """사라진 것은 소멸이지 폐업 전환이 아니다 — 예전에는 이 칸에 섞여 들어갔다."""
+        from etl.ingest import diff_against_previous
+        with conn.cursor() as cur:
+            prev = self._run(cur, [("A", "영업/정상")])
+            cur_ = self._run(cur, [("Z", "영업/정상")])
+        got = diff_against_previous(conn, cur_, prev)
+        assert got["vanished"] == 1 and got["closed"] == 0
+
+    def test_first_run_has_no_transitions(self, conn):
+        from etl.ingest import diff_against_previous
+        with conn.cursor() as cur:
+            run = self._run(cur, [("A", "폐업")])
+        assert diff_against_previous(conn, run, None) == {"new": 1, "kept": 0, "vanished": 0, "closed": 0}
