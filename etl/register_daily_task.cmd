@@ -13,8 +13,10 @@ setlocal
 
 set "TASK=WhereWeGo-DailyIngest"
 set "SCRIPT=%~dp0run_daily.cmd"
-rem LOCALDATA publishes on a 2-day lag; an early run picks up that day's file.
-set "AT=04:30"
+rem 22:00, not early morning. This is a laptop in Modern Standby (S0): it
+rem ignores the task's wake timer, so a 04:30 run never fired (2026-09-22).
+rem LOCALDATA publishes on a 2-day lag, so running late loses nothing.
+set "AT=22:00"
 
 echo task   : %TASK%
 echo script : %SCRIPT%
@@ -27,6 +29,20 @@ schtasks /Create /TN "%TASK%" /TR "cmd /c \"%SCRIPT%\"" /SC DAILY /ST %AT% /F
 if errorlevel 1 (
     echo.
     echo registration failed
+    exit /b 1
+)
+
+rem schtasks /Create resets conditions to defaults, which include
+rem "do not start on battery". Combined with a missed run, that meant the
+rem catch-up was refused when the lid was opened unplugged. Set them here so
+rem re-registering does not bring that back.
+rem   StartWhenAvailable        run a missed schedule as soon as possible
+rem   WakeToRun                 try to wake (ignored under Modern Standby)
+rem   DisallowStartIfOnBatteries off - the catch-up often happens unplugged
+powershell -NoProfile -Command "$t = Get-ScheduledTask -TaskName '%TASK%'; $s = $t.Settings; $s.StartWhenAvailable = $true; $s.WakeToRun = $true; $s.DisallowStartIfOnBatteries = $false; Set-ScheduledTask -TaskName '%TASK%' -Settings $s | Out-Null"
+if errorlevel 1 (
+    echo.
+    echo registered, but setting the conditions failed
     exit /b 1
 )
 
