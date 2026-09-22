@@ -1,6 +1,10 @@
 package com.wherewego.place;
 
 import java.util.List;
+import java.util.Map;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -40,5 +44,17 @@ public class PlaceController {
             @RequestParam(defaultValue = "false") boolean includeClosed,
             @RequestParam(defaultValue = "0") int limit) {
         return repository.search(q, lng, lat, radius, category, includeClosed, limit);
+    }
+
+    /**
+     * 단건 상세 — 출처(원천·인허가번호), 처음·마지막으로 보인 적재 회차, 검수 기록.
+     * 폐업한 곳도 돌려준다. 없으면 404.
+     */
+    @GetMapping("/{poiId}")
+    public ResponseEntity<?> detail(@PathVariable long poiId) {
+        return repository.findDetail(poiId)
+                .<ResponseEntity<?>>map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("message", "없는 장소입니다: " + poiId)));
     }
 }

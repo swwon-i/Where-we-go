@@ -1,10 +1,14 @@
 package com.wherewego.place;
 
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * POI 조회.
@@ -30,7 +34,11 @@ public class PlaceRepository {
                    ST_Y(ST_Transform(p.geom, 4326)) AS lat
             """;
 
+    /** 상세에 싣는 검수 기록 최대 건수. 한 레코드가 여러 회차에 걸쳐 같은 규칙에 계속 걸릴 수 있다. */
+    public static final int MAX_VALIDATIONS = 50;
+
     private final NamedParameterJdbcTemplate jdbc;
+    private final JsonMapper json = JsonMapper.builder().build();
 
     public PlaceRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -120,6 +128,65 @@ public class PlaceRepository {
 
     private static String categoryClause(String category) {
         return category == null || category.isBlank() ? "" : "  AND p.category_code = :category\n";
+    }
+
+    /**
+     * 단건 상세. 폐업한 곳도 돌려준다 — 북마크가 가리키는 곳이 나중에 폐업할 수 있고,
+     * 그때 "왜 검색에 안 나오지" 를 여기서 확인해야 한다.
+     *
+     * <p>검수 기록은 인허가번호({@code target_id})로 잇되 <b>회차의 원천까지 맞춘다</b>.
+     * 일반음식점과 휴게음식점은 인허가번호 체계를 따로 쓰므로 번호만으로는 다른 원천의 기록이
+     * 섞일 수 있다.
+     */
+    public Optional<PlaceDetail> findDetail(long poiId) {
+        var params = new MapSqlParameterSource("id", poiId).addValue("limit", MAX_VALIDATIONS);
+        var rows = jdbc.query(SELECT_COLUMNS + """
+                , p.source, p.source_id, p.licensed_date, p.closed_date,
+                  f.id AS f_id, f.snapshot_date AS f_date, f.started_at AS f_at,
+                  l.id AS l_id, l.snapshot_date AS l_date, l.started_at AS l_at
+                FROM poi p
+                LEFT JOIN ingest_run f ON f.id = p.first_seen_run_id
+                LEFT JOIN ingest_run l ON l.id = p.last_seen_run_id
+                WHERE p.id = :id
+                """, params, (rs, i) -> new PlaceDetail(
+                        mapper(false).mapRow(rs, i),
+                        rs.getString("source"),
+                        rs.getString("source_id"),
+                        rs.getObject("licensed_date", LocalDate.class),
+                        rs.getObject("closed_date", LocalDate.class),
+                        run(rs, "f"),
+                        run(rs, "l"),
+                        List.of()));
+        if (rows.isEmpty()) return Optional.empty();
+
+        var validations = jdbc.query("""
+                SELECT v.run_id, v.rule_code, v.severity, v.detail::text AS detail, v.created_at
+                FROM poi p
+                JOIN validation_result v ON v.target_id = p.source_id
+                JOIN ingest_run r ON r.id = v.run_id AND r.source = p.source
+                WHERE p.id = :id
+                ORDER BY v.run_id DESC, v.severity, v.rule_code
+                LIMIT :limit
+                """, params, (rs, i) -> new PlaceDetail.Validation(
+                        rs.getLong("run_id"),
+                        rs.getString("rule_code"),
+                        rs.getString("severity"),
+                        rs.getString("detail") == null ? null : json.readTree(rs.getString("detail")),
+                        rs.getObject("created_at", OffsetDateTime.class)));
+
+        var d = rows.getFirst();
+        return Optional.of(new PlaceDetail(
+                d.place(), d.source(), d.sourceId(), d.licensedDate(), d.closedDate(),
+                d.firstSeen(), d.lastSeen(), validations));
+    }
+
+    private static PlaceDetail.Run run(java.sql.ResultSet rs, String prefix) throws java.sql.SQLException {
+        Long id = rs.getObject(prefix + "_id", Long.class);
+        if (id == null) return null;
+        return new PlaceDetail.Run(
+                id,
+                rs.getObject(prefix + "_date", LocalDate.class),
+                rs.getObject(prefix + "_at", OffsetDateTime.class));
     }
 
     static int clampRadius(int radiusM) {
