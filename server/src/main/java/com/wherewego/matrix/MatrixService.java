@@ -164,7 +164,7 @@ public class MatrixService {
     /**
      * 행렬의 칸 하나를 눌렀을 때 보여줄 경로.
      *
-     * @param legs 도보·지하철·버스 구간. 대기와 환승 도보는 뒤따르는 탈것에 얹혀 있다
+     * @param legs 도보 · 승차(승강장까지 + 대기) · 주행 · 환승(갈아타기 + 대기)이 각자 한 줄이다. RouteBuilder 참조
      */
     public record RouteDetail(
             long graphBuildId,

@@ -132,7 +132,7 @@ export const api = {
 
   clientConfig: () => request('GET', '/client-config'),
 
-  // 파이프라인 운영 기록 — 로그인 없이 읽힌다
+  // 파이프라인 운영 기록 — 관리자만 (WWG_ADMIN_LOGIN_IDS). 아니면 401/403
   adminIngestRuns: () => request('GET', '/admin/ingest-runs'),
   adminValidationSummary: () => request('GET', '/admin/validation-summary'),
   adminValidationResults: (params) =>
