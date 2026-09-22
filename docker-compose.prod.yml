@@ -1,0 +1,44 @@
+# 서버(EC2) 전용 덧씌우기. 기본 docker-compose.yml 위에 얹는다.
+#
+#   서버의 .env 에 COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml 을 두면
+#   `docker compose ...` 가 두 파일을 알아서 합친다. 일일 실행(etl/run_daily.sh)도 그대로 따른다.
+#
+# 바뀌는 것
+#   - 앞에 Caddy 를 둔다. 80/443 만 열고 HTTPS 인증서(Let's Encrypt)를 알아서 받고 갱신한다
+#   - 서버의 8080 을 밖에 열지 않는다. Caddy 만 compose 내부망으로 붙는다
+#   - 로그인 쿠키를 HTTPS 전용으로, 가입·로그인·방 만들기에 횟수 제한
+#
+# 도메인이 없으면 공인 IP 로 만든 무료 이름을 쓴다: 3.35.1.2 → 3-35-1-2.sslip.io
+services:
+  server:
+    # 기본 파일의 "8080:8080" 을 지운다. 밖에서는 Caddy(443)로만 들어온다.
+    ports: !reset []
+    environment:
+      WWG_COOKIE_SECURE: "true"
+      WWG_RATE_LIMIT: "true"
+      # Caddy 가 붙이는 X-Forwarded-For/Proto 를 믿는다. 횟수 제한이 접속자 IP 를 보고,
+      # 서버가 요청을 https 로 인식해야 보안 쿠키가 나간다. 8080 이 밖에 열려 있지 않아서
+      # 이 헤더를 붙일 수 있는 것은 Caddy 뿐이다.
+      SERVER_FORWARD_HEADERS_STRATEGY: native
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: wwg-caddy
+    depends_on:
+      - server
+    environment:
+      WWG_DOMAIN: "${WWG_DOMAIN:?서버 .env 에 WWG_DOMAIN 을 넣어라 - 예) 3-35-1-2.sslip.io}"
+      TZ: Asia/Seoul
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # 인증서를 여기 둔다. 지우면 재발급을 받는데, Let's Encrypt 는 발급 횟수를 제한한다
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

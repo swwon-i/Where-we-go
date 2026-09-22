@@ -1,0 +1,5 @@
+# etl 이미지 빌드 컨텍스트에서 제외. out/ 에는 보행망 graphml(191MB)과 로그가 있다.
+out/
+tests/
+**/__pycache__/
+*.cmd

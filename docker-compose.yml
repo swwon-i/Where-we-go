@@ -5,14 +5,19 @@ services:
     environment:
       POSTGRES_DB: wherewego
       POSTGRES_USER: wherewego
-      POSTGRES_PASSWORD: wherewego
+      # 비밀번호는 .env 의 WWG_DB_PASSWORD. 없으면 로컬 개발용 값이다 — 서버에서는 반드시 바꾼다.
+      POSTGRES_PASSWORD: ${WWG_DB_PASSWORD:-wherewego}
+      TZ: Asia/Seoul
       # 한글 데이터를 다루므로 인코딩을 못박는다.
       # ko_KR.utf8 은 이 이미지(Debian)에 없어 initdb 가 실패한다 — C.UTF-8 을 쓴다.
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+    # 이 컴퓨터 안에서만 열린다. 로컬 ETL·psql 은 localhost 로 붙고, 밖에서는 닿지 않는다.
+    # 서버에 그대로 올려도 DB 가 인터넷에 열리지 않는다.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U wherewego -d wherewego"]
       interval: 5s
@@ -31,7 +36,7 @@ services:
     command: >
       -url=jdbc:postgresql://db:5432/wherewego
       -user=wherewego
-      -password=wherewego
+      -password=${WWG_DB_PASSWORD:-wherewego}
       -connectRetries=10
       -baselineOnMigrate=true
       migrate
@@ -50,7 +55,11 @@ services:
       # 컨테이너 안에서는 localhost 가 아니라 compose 네트워크의 서비스 이름으로 붙는다.
       WWG_DB_URL: jdbc:postgresql://db:5432/wherewego
       WWG_DB_USER: wherewego
-      WWG_DB_PASSWORD: wherewego
+      WWG_DB_PASSWORD: ${WWG_DB_PASSWORD:-wherewego}
+      TZ: Asia/Seoul
+      # HTTPS 뒤에 둘 때 true. 로컬은 http 라 켜면 로그인이 안 된다 (docker-compose.prod.yml)
+      WWG_COOKIE_SECURE: ${WWG_COOKIE_SECURE:-false}
+      WWG_RATE_LIMIT: ${WWG_RATE_LIMIT:-false}
       # 카카오맵 JavaScript 키. 없으면 지도 자리에 발급 안내가 뜬다.
       WWG_KAKAO_JS_KEY: ${WWG_KAKAO_JS_KEY:-}
       # 관리자 로그인 아이디(쉼표 구분). 저장소 루트 .env 에 둔다. 없으면 /admin 을 아무도 못 연다.
@@ -58,6 +67,25 @@ services:
     ports:
       - "8080:8080"
     restart: unless-stopped
+
+  # 일회성 실행. 인허가 받기·적재를 호스트에 파이썬 없이 돌린다 (서버의 일일 실행이 쓴다).
+  #   docker compose --profile etl run --rm etl etl.fetch --source all
+  #   docker compose --profile etl run --rm etl etl.ingest --source all --wait-db 180
+  # 그래프 빌드(OSMnx)는 이 이미지에 없다 — 로컬에서 빌드해 DB 째로 옮긴다 (docs/deploy-aws.md).
+  etl:
+    # 컨텍스트는 etl/ 만. 루트 .dockerignore 가 etl/ 을 빼 두었고(서버 이미지용), 여기엔 etl/.dockerignore 가 적용된다.
+    build:
+      context: ./etl
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      WWG_DSN: postgresql://wherewego:${WWG_DB_PASSWORD:-wherewego}@db:5432/wherewego
+      TZ: Asia/Seoul
+    volumes:
+      - ./csv:/app/csv
+      - ./etl/out:/app/etl/out
+    profiles: ["etl"]
 
 volumes:
   pgdata:

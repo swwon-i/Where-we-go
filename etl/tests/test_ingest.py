@@ -12,7 +12,7 @@ from etl.ingest import (
     OUTSIDE_ALARM_RATIO,
     SEOUL_5186_BOUNDS,
     count_outside_seoul,
-    dedupe_by_source_id,
+    staging_chunk,
     file_hash,
     is_active,
     normalize_category,
@@ -124,16 +124,33 @@ class TestCountOutsideSeoul:
         assert 5 / 538_576 < OUTSIDE_ALARM_RATIO
 
 
-class TestDedupe:
-    def test_keeps_last_occurrence(self):
-        df = pd.DataFrame({"source_id": ["a", "b", "a"], "name": ["1", "2", "3"]})
-        out = dedupe_by_source_id(df)
-        assert len(out) == 2
-        assert out[out["source_id"] == "a"]["name"].item() == "3"
+def _raw_chunk(rows):
+    cols = ["id", "mgmt_no", "biz_name", "biz_type_name", "road_address", "jibun_address",
+            "phone", "biz_status_name", "license_date", "closed_date", "coord_x", "coord_y"]
+    return pd.DataFrame(rows, columns=cols, dtype=object)
 
-    def test_no_duplicates_unchanged(self):
-        df = pd.DataFrame({"source_id": ["a", "b"], "name": ["1", "2"]})
-        assert len(dedupe_by_source_id(df)) == 2
+
+class TestStagingChunk:
+    """raw 한 조각 → staging 모양. 조각마다 따로 돌아도 결과가 같아야 한다."""
+
+    ROW = [1, " A-1 ", " 가게 ", "한식", "도로", "지번", "02", "영업/정상", "20200101", None,
+           "200000.0", "450000.0"]
+
+    def test_strips_and_parses(self):
+        out, _ = staging_chunk(_raw_chunk([self.ROW]))
+        r = out.iloc[0]
+        assert (r["raw_id"], r["source_id"], r["name"]) == (1, "A-1", "가게")
+        assert np.isfinite(r.east) and np.isfinite(r.north)
+
+    def test_rows_without_mgmt_no_are_dropped(self):
+        blank = [2, "  ", "x", None, None, None, None, None, None, None, None, None]
+        out, _ = staging_chunk(_raw_chunk([self.ROW, blank]))
+        assert list(out["source_id"]) == ["A-1"]
+
+    def test_missing_coords_stay_nan(self):
+        row = self.ROW[:10] + [None, None]
+        out, outside = staging_chunk(_raw_chunk([row]))
+        assert np.isnan(out.iloc[0].east) and outside == 0
 
 
 class TestFileHash:
@@ -267,3 +284,75 @@ class TestDiffAgainstPrevious:
         with conn.cursor() as cur:
             run = self._run(cur, [("A", "폐업")])
         assert diff_against_previous(conn, run, None) == {"new": 1, "kept": 0, "vanished": 0, "closed": 0}
+
+
+@pytest.mark.skipif(not _db_up(), reason="DB 가 없으면 건너뛴다")
+class TestBuildStaging:
+    """조각으로 나눠 읽어도 같은 관리번호는 파일에서 마지막 것만 남는다 — 조각 경계를 넘어도."""
+
+    @pytest.fixture
+    def conn(self):
+        from etl.db import connect
+        c = connect()
+        yield c
+        c.rollback()
+        c.close()
+
+    def test_dedupe_keeps_last_across_chunks(self, conn, monkeypatch):
+        import etl.ingest as ingest
+        monkeypatch.setattr(ingest, "CHUNK_ROWS", 2)     # 네 행을 두 조각으로
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO ingest_run (source) VALUES ('TEST_STG') RETURNING id")
+            run_id = cur.fetchone()[0]
+            for name in ["첫번째", "다른가게", "셋째", "마지막"]:
+                mgmt = "B-2" if name == "다른가게" else "A-1"
+                cur.execute("INSERT INTO poi_raw (run_id, mgmt_no, biz_name) VALUES (%s, %s, %s)",
+                            (run_id, mgmt, name))
+        rows, _ = ingest.build_staging(conn, run_id)
+        assert rows == 2
+        with conn.cursor() as cur:
+            cur.execute("SELECT source_id, name FROM poi_staging WHERE run_id = %s ORDER BY 1", (run_id,))
+            assert cur.fetchall() == [("A-1", "마지막"), ("B-2", "다른가게")]
+
+
+@pytest.mark.skipif(not _db_up(), reason="DB 가 없으면 건너뛴다")
+class TestPruneHistory:
+    """raw 와 검수 기록은 최근 N 회차만. 매일 갱신이면 raw 가 한 달 8GB 쌓인다."""
+
+    @pytest.fixture
+    def conn(self):
+        from etl.db import connect
+        c = connect()
+        yield c
+        c.rollback()
+        c.close()
+
+    def _runs(self, cur, n, with_raw=True):
+        ids = []
+        for _ in range(n):
+            cur.execute("INSERT INTO ingest_run (source) VALUES ('TEST_PRUNE') RETURNING id")
+            rid = cur.fetchone()[0]
+            if with_raw:
+                cur.execute("INSERT INTO poi_raw (run_id, mgmt_no) VALUES (%s, 'x')", (rid,))
+                cur.execute("INSERT INTO validation_result (run_id, rule_code, severity, target_id) "
+                            "VALUES (%s, 'NAME_MISSING', 'ERROR', 'x')", (rid,))
+            ids.append(rid)
+        return ids
+
+    def test_keeps_latest_runs(self, conn):
+        from etl.ingest import prune_history
+        with conn.cursor() as cur:
+            ids = self._runs(cur, 5)
+            assert prune_history(conn, "TEST_PRUNE", raw_keep=2, validation_keep=3) == (3, 2)
+            cur.execute("SELECT run_id FROM poi_raw WHERE run_id = ANY(%s) ORDER BY 1", (ids,))
+            assert [r[0] for r in cur.fetchall()] == ids[-2:]
+            cur.execute("SELECT count(*) FROM ingest_run WHERE id = ANY(%s)", (ids,))
+            assert cur.fetchone()[0] == 5       # 회차 기록은 지우지 않는다
+
+    def test_skipped_runs_do_not_shorten_retention(self, conn):
+        """SKIPPED 회차에는 raw 가 없다. 회차 번호로 세면 건너뛴 날마다 보관분이 줄어든다."""
+        from etl.ingest import prune_history
+        with conn.cursor() as cur:
+            ids = self._runs(cur, 2)
+            self._runs(cur, 3, with_raw=False)
+            assert prune_history(conn, "TEST_PRUNE", raw_keep=2, validation_keep=2) == (0, 0)

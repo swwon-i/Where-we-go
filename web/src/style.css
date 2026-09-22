@@ -355,3 +355,12 @@ div:has(> .place-card) { pointer-events: none; }
 .route-dot { width: 14px; height: 14px; border-radius: 50%; box-sizing: border-box; pointer-events: none; }
 .route-dot.stop { background: #fff; border: 3px solid var(--c); box-shadow: 0 0 0 2px rgba(255, 255, 255, .8); }
 .route-dot.end { width: 16px; height: 16px; background: var(--c); border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .35); }
+
+/* 지도 오른쪽 아래 데이터 출처 — 카카오 로고·축척은 왼쪽 아래 */
+.map-credit {
+  position: absolute; right: 6px; bottom: 4px; z-index: 3;
+  font-size: 11px; line-height: 1.4; color: #4b5563;
+  background: rgba(255, 255, 255, .8); padding: 1px 6px; border-radius: 3px;
+  pointer-events: auto;
+}
+.map-credit a { color: inherit; }

@@ -1,0 +1,17 @@
+# HTTPS 앞단. 도메인은 .env 의 WWG_DOMAIN (docker-compose.prod.yml 이 넘긴다).
+# 도메인이 이 서버를 가리키고 80/443 이 열려 있으면 인증서를 알아서 받는다.
+{$WWG_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy server:8080
+
+	header {
+		# 한 번 https 로 들어온 브라우저는 다음부터 http 로 시도하지 않는다
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

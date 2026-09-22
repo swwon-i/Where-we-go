@@ -183,15 +183,6 @@ def count_outside_seoul(east: np.ndarray, north: np.ndarray) -> int:
     return int((ok & ~inside).sum())
 
 
-def dedupe_by_source_id(df: pd.DataFrame) -> pd.DataFrame:
-    """같은 관리번호가 여러 건이면 마지막 것만 남긴다.
-
-    raw 에는 제약을 걸지 않으므로 중복이 그대로 들어온다. serving 은
-    `UNIQUE(source, source_id)` 라 여기서 정리하지 않으면 UPSERT 가 실패한다.
-    """
-    return df.drop_duplicates(subset=["source_id"], keep="last")
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # 적재 단계
 # ──────────────────────────────────────────────────────────────────────────────
@@ -274,19 +265,84 @@ def build_staging(conn, run_id: int) -> tuple[int, int]:
     """poi_raw → poi_staging. 타입·좌표 변환과 중복 제거를 여기서 한다.
 
     `(staging 행 수, 서울 밖 좌표 수)` 를 돌려준다.
+
+    **CHUNK_ROWS 행씩 나눠 처리한다.** 예전에는 raw 한 회차(53만 행)를 통째로 DataFrame 에
+    올리고 CSV 전체를 문자열 하나로 만들어 COPY 했다 — 적재 한 번에 1.4GB 를 썼고, 2GB 서버에서
+    DB·서버와 같이 돌면 넘친다. 이제 서버 쪽 커서로 끊어 읽어 조각마다 변환해 임시 테이블로 보낸다.
+
+    중복 제거(같은 관리번호는 **파일에서 마지막 것**)는 조각을 넘나들므로 SQL 로 한다 —
+    raw 의 `id` 가 파일 순서이고, `DISTINCT ON (source_id) … ORDER BY id DESC` 가 마지막 것이다.
     """
     cols = [
-        "mgmt_no", "biz_name", "biz_type_name", "road_address", "jibun_address",
+        "id", "mgmt_no", "biz_name", "biz_type_name", "road_address", "jibun_address",
         "phone", "biz_status_name", "license_date", "closed_date", "coord_x", "coord_y",
     ]
+    outside = 0
     with conn.cursor() as cur:
-        cur.execute(
-            f"SELECT {', '.join(cols)} FROM poi_raw WHERE run_id = %s", (run_id,)
-        )
-        df = pd.DataFrame(cur.fetchall(), columns=cols, dtype=object)
+        cur.execute("CREATE TEMP TABLE _stg (LIKE poi_staging) ON COMMIT DROP")
+        cur.execute("ALTER TABLE _stg DROP COLUMN id, DROP COLUMN geom, DROP COLUMN is_valid")
+        cur.execute("ALTER TABLE _stg ADD COLUMN raw_id bigint, "
+                    "ADD COLUMN east float8, ADD COLUMN north float8")
 
+        with conn.cursor(name="raw_rows") as src:
+            src.itersize = CHUNK_ROWS
+            src.execute(f"SELECT {', '.join(cols)} FROM poi_raw WHERE run_id = %s", (run_id,))
+            while rows := src.fetchmany(CHUNK_ROWS):
+                chunk, n_out = staging_chunk(pd.DataFrame(rows, columns=cols, dtype=object))
+                outside += n_out
+                buf = io.StringIO()
+                writer = csv.writer(buf)
+                for r in chunk.itertuples(index=False):
+                    writer.writerow(
+                        [
+                            run_id, r.raw_id, r.source_id, r.name, r.category_raw, r.road_address,
+                            r.jibun_address, r.phone, r.biz_status_name,
+                            r.licensed_date or "", r.closed_date or "",
+                            "" if not np.isfinite(r.east) else r.east,
+                            "" if not np.isfinite(r.north) else r.north,
+                            "" if not np.isfinite(r.coord_x_raw) else r.coord_x_raw,
+                            "" if not np.isfinite(r.coord_y_raw) else r.coord_y_raw,
+                        ]
+                    )
+                with cur.copy(
+                    "COPY _stg (run_id, raw_id, source_id, name, category_raw, road_address, "
+                    "jibun_address, phone, biz_status_name, licensed_date, closed_date, "
+                    "east, north, coord_x_raw, coord_y_raw) FROM STDIN WITH (FORMAT csv)"
+                ) as cp:
+                    cp.write(buf.getvalue())
+
+        # 같은 관리번호가 여러 건이면 파일에서 마지막 것만 — raw 에는 제약이 없어 중복이 그대로 들어오고,
+        # serving 은 UNIQUE(source, source_id) 라 여기서 정리하지 않으면 UPSERT 가 실패한다.
+        cur.execute(
+            """
+            INSERT INTO poi_staging (
+                run_id, source_id, name, category_raw, road_address, jibun_address,
+                phone, biz_status_name, licensed_date, closed_date, geom,
+                coord_x_raw, coord_y_raw)
+            SELECT DISTINCT ON (source_id)
+                   run_id, source_id, name, category_raw, road_address, jibun_address,
+                   phone, biz_status_name, licensed_date, closed_date,
+                   CASE WHEN east IS NULL OR north IS NULL THEN NULL
+                        ELSE ST_SetSRID(ST_MakePoint(east, north), %s) END,
+                   coord_x_raw, coord_y_raw
+            FROM _stg
+            ORDER BY source_id, raw_id DESC
+            """,
+            (TARGET_EPSG,),
+        )
+        inserted = cur.rowcount
+        # 방금 넣은 수십만 행을 플래너가 보게 한다.
+        # 트랜잭션 안이라 autoanalyze 가 손대지 못하고, 통계가 낡으면 검수 규칙의
+        # 조인이 nested loop 로 풀려 몇 분씩 걸린다 (DUPLICATE_NAME_ADDR 에서 실측).
+        cur.execute("ANALYZE poi_staging")
+    return inserted, outside
+
+
+def staging_chunk(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """raw 한 조각 → staging 모양. `(조각, 서울 밖 좌표 수)`. 관리번호 없는 행은 버린다."""
     out = pd.DataFrame(
         {
+            "raw_id": df["id"],
             "source_id": df["mgmt_no"].str.strip(),
             "name": df["biz_name"].str.strip(),
             "category_raw": df["biz_type_name"].str.strip(),
@@ -301,60 +357,9 @@ def build_staging(conn, run_id: int) -> tuple[int, int]:
         }
     )
     out = out[out["source_id"].notna() & (out["source_id"] != "")]
-    out = dedupe_by_source_id(out)
-
-    east, north = transform_coords(
-        out["coord_x_raw"].to_numpy(), out["coord_y_raw"].to_numpy()
-    )
-    outside = count_outside_seoul(east, north)
-    out["east"], out["north"] = east, north
-
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    for r in out.itertuples(index=False):
-        writer.writerow(
-            [
-                run_id, r.source_id, r.name, r.category_raw, r.road_address,
-                r.jibun_address, r.phone, r.biz_status_name,
-                r.licensed_date or "", r.closed_date or "",
-                "" if not np.isfinite(r.east) else r.east,
-                "" if not np.isfinite(r.north) else r.north,
-                "" if not np.isfinite(r.coord_x_raw) else r.coord_x_raw,
-                "" if not np.isfinite(r.coord_y_raw) else r.coord_y_raw,
-            ]
-        )
-    buf.seek(0)
-
-    with conn.cursor() as cur:
-        cur.execute("CREATE TEMP TABLE _stg (LIKE poi_staging) ON COMMIT DROP")
-        cur.execute("ALTER TABLE _stg DROP COLUMN id, DROP COLUMN geom, DROP COLUMN is_valid")
-        cur.execute("ALTER TABLE _stg ADD COLUMN east float8, ADD COLUMN north float8")
-        with cur.copy(
-            "COPY _stg (run_id, source_id, name, category_raw, road_address, "
-            "jibun_address, phone, biz_status_name, licensed_date, closed_date, "
-            "east, north, coord_x_raw, coord_y_raw) FROM STDIN WITH (FORMAT csv)"
-        ) as cp:
-            cp.write(buf.read())
-        cur.execute(
-            """
-            INSERT INTO poi_staging (
-                run_id, source_id, name, category_raw, road_address, jibun_address,
-                phone, biz_status_name, licensed_date, closed_date, geom,
-                coord_x_raw, coord_y_raw)
-            SELECT run_id, source_id, name, category_raw, road_address, jibun_address,
-                   phone, biz_status_name, licensed_date, closed_date,
-                   CASE WHEN east IS NULL OR north IS NULL THEN NULL
-                        ELSE ST_SetSRID(ST_MakePoint(east, north), %s) END,
-                   coord_x_raw, coord_y_raw
-            FROM _stg
-            """,
-            (TARGET_EPSG,),
-        )
-        # 방금 넣은 수십만 행을 플래너가 보게 한다.
-        # 트랜잭션 안이라 autoanalyze 가 손대지 못하고, 통계가 낡으면 검수 규칙의
-        # 조인이 nested loop 로 풀려 몇 분씩 걸린다 (DUPLICATE_NAME_ADDR 에서 실측).
-        cur.execute("ANALYZE poi_staging")
-    return len(out), outside
+    east, north = transform_coords(out["coord_x_raw"].to_numpy(), out["coord_y_raw"].to_numpy())
+    out = out.assign(east=east, north=north)
+    return out, count_outside_seoul(east, north)
 
 
 def run_validations(conn, run_id: int, prev_run_id: int | None) -> dict[str, int]:
@@ -501,8 +506,8 @@ def prune_staging(conn, source_code: str, keep_run_ids: list[int]) -> int:
     """오래된 staging 회차를 버린다.
 
     회차 diff 는 **직전 회차 하나만** 필요한데, 남겨두면 회차마다 수십만 행씩 쌓인다.
-    일일 자동 실행을 걸면 열흘이면 500만 행이 된다. raw 는 재생성용으로 보존하되
-    staging 은 현재·직전만 남긴다.
+    일일 자동 실행을 걸면 열흘이면 500만 행이 된다. staging 은 현재·직전만 남긴다.
+    raw 와 검수 기록은 `prune_history` 가 따로 정리한다.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -514,6 +519,46 @@ def prune_staging(conn, source_code: str, keep_run_ids: list[int]) -> int:
             (source_code, keep_run_ids),
         )
         return cur.rowcount
+
+
+#: raw 를 남길 회차 수(원천마다). raw 는 가공을 다시 돌리기 위한 원본이라 최근 것만 있으면 된다.
+#: 회차 하나가 일반음식점 약 280MB 라, 전부 남기면 매일 갱신에서 한 달 8GB 가 쌓인다.
+RAW_KEEP_RUNS = 7
+
+#: 검수 기록을 남길 회차 수(원천마다). 장소 상세의 "걸린 검수 기록"과 관리자 화면이 읽는다.
+#: 회차당 7만 행 안팎이라 한 달이면 충분하다.
+VALIDATION_KEEP_RUNS = 30
+
+
+def prune_history(conn, source_code: str,
+                  raw_keep: int = RAW_KEEP_RUNS,
+                  validation_keep: int = VALIDATION_KEEP_RUNS) -> tuple[int, int]:
+    """오래된 raw · 검수 기록을 버린다. `(raw 지운 행, 검수 기록 지운 행)`.
+
+    기준은 **그 기록이 있는 회차** 중 최근 N 개다 — SKIPPED 회차는 raw 도 검수도 없으므로
+    회차 번호로 세면 건너뛴 날마다 보관 기간이 줄어든다. 회차 자체(`ingest_run`)는 지우지 않는다.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM poi_raw WHERE run_id IN (
+                SELECT id FROM ingest_run r
+                WHERE r.source = %(src)s AND EXISTS (SELECT 1 FROM poi_raw x WHERE x.run_id = r.id)
+                ORDER BY id DESC OFFSET %(keep)s)
+            """,
+            {"src": source_code, "keep": raw_keep},
+        )
+        raw = cur.rowcount
+        cur.execute(
+            """
+            DELETE FROM validation_result WHERE run_id IN (
+                SELECT id FROM ingest_run r
+                WHERE r.source = %(src)s AND EXISTS (SELECT 1 FROM validation_result v WHERE v.run_id = r.id)
+                ORDER BY id DESC OFFSET %(keep)s)
+            """,
+            {"src": source_code, "keep": validation_keep},
+        )
+        return raw, cur.rowcount
 
 
 def finish_run(conn, run_id: int, status: str, stats: dict, error: str | None = None) -> None:
@@ -587,6 +632,10 @@ def ingest_source(conn, source: Source, limit: int | None, force: bool) -> dict:
         pruned = prune_staging(conn, source.code, keep)
         if pruned:
             print(f"   staging 정리 {pruned:,}행 (현재·직전 회차만 보존)")
+        raw_pruned, val_pruned = prune_history(conn, source.code)
+        if raw_pruned or val_pruned:
+            print(f"   오래된 기록 정리 — raw {raw_pruned:,}행 (최근 {RAW_KEEP_RUNS}회차 보존) · "
+                  f"검수 {val_pruned:,}행 (최근 {VALIDATION_KEEP_RUNS}회차 보존)")
 
         with conn.cursor() as cur:
             cur.execute(

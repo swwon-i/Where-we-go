@@ -60,6 +60,7 @@ export function createMap(container, { lat, lng }, level = 5) {
     center: new kakao.maps.LatLng(lat, lng),
     level,
   });
+  container.appendChild(credit());
 
   let markers = [];
   let infoWindow = null;
@@ -254,4 +255,16 @@ function coloredPin(color) {
     new window.kakao.maps.Size(26, 34),
     { offset: new window.kakao.maps.Point(13, 34) },
   );
+}
+
+/**
+ * 데이터 출처. 경로를 계산하는 보행망이 OpenStreetMap 이라 ODbL 에 따라 표시한다.
+ * 배경지도(카카오)는 SDK 가 자기 로고를 왼쪽 아래에 붙이므로 오른쪽 아래에 둔다.
+ */
+function credit() {
+  const el = document.createElement('div');
+  el.className = 'map-credit';
+  el.innerHTML = '보행망 © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> '
+    + '· 인허가 LOCALDATA(행정안전부) · 시각표 서울교통공사';
+  return el;
 }

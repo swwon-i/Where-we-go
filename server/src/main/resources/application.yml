@@ -18,6 +18,10 @@ wwg:
   # 관리자 로그인 아이디, 쉼표로 구분. 비우면 관리자가 없다(/admin 은 아무도 못 연다).
   # 저장소에 넣지 않는다 — 환경변수나 저장소 루트의 .env 에 WWG_ADMIN_LOGIN_IDS=... 로 둔다.
   admin-login-ids: ${WWG_ADMIN_LOGIN_IDS:}
+  # 가입·로그인·방 만들기·행렬 계산의 IP 별 횟수 제한 (RateLimitFilter). 공개 서버에서만 켠다 —
+  # 로컬 테스트는 같은 IP 에서 수십 번 가입한다.
+  rate-limit:
+    enabled: ${WWG_RATE_LIMIT:false}
 
 server:
   port: 8080

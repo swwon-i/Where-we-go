@@ -100,6 +100,8 @@ py -m venv .venv
 ./.venv/Scripts/python.exe -X utf8 -m etl.build_graph              # 경로 그래프 (약 2분 반)
 ```
 
+서버(AWS EC2 한 대)에 올리는 방법은 [docs/deploy-aws.md](docs/deploy-aws.md) — HTTPS, DB 옮기기, 매일 22:00 갱신까지.
+
 ### 설정 (`.env`, 저장소 루트)
 
 | 키 | |
