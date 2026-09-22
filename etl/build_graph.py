@@ -51,7 +51,21 @@ from etl.subway_timing import (
 )
 
 GRAPHML_PATH = "etl/out/graph/seoul_walk.graphml"
+#: 환승 도보시간은 두 파일에서 온다.
+#:
+#:   MEASURED  수도권 도시철도 환승 데이터 (OA-22521). 내린 칸 → 탈 칸 단위로 잰 값.
+#:             1~8호선끼리는 99쌍 전부 있다. 9호선 1단계는 전부 10:00 자리값이다 —
+#:             운영사(서울시메트로9호선)가 달라 공사가 재지 않은 것으로 보인다.
+#:   DISTANCE  환승역거리 소요시간 정보. 소요시간이 잰 값이 아니라 `환승거리 ÷ 1.2m/s` 다
+#:             (140행 전부 ±1초). 평지를 걷는다고 본 값이라 계단·승강장 보행이 빠져 있다.
+#:
+#: MEASURED 를 쓰고, 거기 없는 쌍(사실상 9호선)만 DISTANCE 를 MEASURED 기준으로 보정해 쓴다.
+#: calibrate_transfers 주석 참조.
+MEASURED_TRANSFER_PATH = "csv/지하철/서울교통공사_수도권 도시철도 환승 데이터_20250317.csv"
 TRANSFER_PATH = "csv/지하철/서울교통공사_환승역거리 소요시간 정보_20250331.csv"
+
+#: MEASURED 파일이 값을 모를 때 넣어 둔 자리값(10:00). 잰 값이 아니므로 버린다.
+TRANSFER_PLACEHOLDER_SEC = 600
 
 BUS_SECTION_PATH = "csv/버스/tpss_route_section_speedh_2026.08.31-09.06.csv"
 BUS_ROUTE_PATH = "csv/버스/서울시 노선마스터 정보.csv"
@@ -73,18 +87,18 @@ BUS_RUN_MIN_SEC, BUS_RUN_MAX_SEC = 1, 3_600
 #: 도보 속도(m/s). 계획서 §4 의 walkSpeed 기본값과 같아야 한다.
 WALK_SPEED_MPS = 1.2
 
-#: 환승 실측값이 없는 쌍에 쓸 값(초). 계획서가 "근거 없는 값"이라 지적한 180초이며,
+#: 두 환승 파일 어디에도 없는 쌍에 쓸 값(초). 계획서가 "근거 없는 값"이라 지적한 180초이며,
 #: 실제로 쓰인 비율을 graph_build.transfer_fallback_ratio 에 남긴다.
 TRANSFER_FALLBACK_SEC = 180
 
 #: 같은 역에서 급행 ↔ 완행을 갈아타는 도보시간(초).
 #:
-#: 환승 실측 데이터에는 이 쌍이 없다. 다른 호선으로 갈아타는 것이 아니라 같은 호선 안에서
+#: 환승 데이터에는 이 쌍이 없다. 다른 호선으로 갈아타는 것이 아니라 같은 호선 안에서
 #: 열차 등급만 바꾸는 것이기 때문이다. TRANSFER_FALLBACK_SEC(180초)를 그대로 쓰면
 #: 급행이 과도하게 불리해진다 — 9호선 급행 정차역은 대부분 같은 승강장 맞은편이라
 #: 계단을 오르내리지 않는다.
 #:
-#: 승강장 ↔ 대합실 편도(STATION_TRAVERSE_RATIO 로 유도되는 값, 실측 중앙 기준 약 40초)보다
+#: 승강장 ↔ 대합실 편도(STATION_TRAVERSE_RATIO 로 유도되는 값, 환승값 중앙 기준 약 90초)보다
 #: 짧아야 한다는 것이 유일한 근거다. 같은 층에서 건너가는 것이 대합실까지 올라가는 것보다
 #: 쌀 수밖에 없다. 30초로 둔다 — 정차시간 중앙값과 같은 자릿수다.
 #:
@@ -118,11 +132,11 @@ BUS_SERVICE_MIN_SHARE = 0.5
 #: 승강장 ↔ 대합실 이동시간을 환승 소요시간의 몇 배로 볼 것인가.
 #:
 #: 환승은 승강장 → 대합실 → 승강장 이므로 편도는 그 절반이다. 상수를 새로 만들지 않고
-#: 실측 환승시간에서 유도한다 — 계획서가 transferPenalty 180초를 "근거 없는 값"이라고
+#: 환승 소요시간에서 유도한다 — 계획서가 transferPenalty 180초를 "근거 없는 값"이라고
 #: 지적했던 것과 같은 잘못을 반복하지 않기 위해서다.
 #:
 #: 이 값이 필요한 이유는 **환승이 공짜가 되는 것을 막기 위해서**다. 진출입이 싸면
-#: 승강장 → 정류장 → 승강장 으로 갈아타는 쪽이 환승 통로보다 저렴해져 실측 환승
+#: 승강장 → 정류장 → 승강장 으로 갈아타는 쪽이 환승 통로보다 저렴해져 환승
 #: 도보시간이 통째로 빠진다(실제로 을지로4가에서 2→5호선이 1초에 갈아타졌다).
 #:
 #: 0.5 로 두면 성질이 수식으로 보장된다.
@@ -166,7 +180,7 @@ def normalize_line(value: object) -> str | None:
 
 
 def load_transfers(path: str | Path) -> pd.DataFrame:
-    """환승역 도보시간. `(역명, 호선A, 호선B, 초)` 로 정규화한다.
+    """DISTANCE 파일의 환승 도보시간. `(역명, 호선A, 호선B, 초)` 로 정규화한다.
 
     원본은 한 방향만 담고 있어(1호선→4호선) 반대도 만들어 둔다 — 환승은 양방향이다.
     """
@@ -184,6 +198,76 @@ def load_transfers(path: str | Path) -> pd.DataFrame:
     both = pd.concat([forward, backward], ignore_index=True)
     both["sec"] = both["sec"].round().astype(int)
     return both.drop_duplicates(subset=["station", "line_a", "line_b"])
+
+
+def load_measured_transfers(path: str | Path) -> pd.DataFrame:
+    """MEASURED 파일의 환승 도보시간. `(역명, 호선A, 호선B, 초)`.
+
+    원본은 방향과 하차·승차 칸마다 한 행이다(서울역 1→4 만 네 행). 그래프의 환승은
+    (역 × 호선) 플랫폼끼리 잇고 칸을 모르므로 **쌍마다 중앙값**을 쓴다. 방향은 원본에
+    양쪽이 다 있어 만들지 않는다.
+
+    버리는 것:
+      - 10:00 자리값 (TRANSFER_PLACEHOLDER_SEC)
+      - 숫자 호선이 아닌 쪽 (공항철도·신림선 등 — 시각표에 없어 그래프에 없다)
+      - 출발역과 도착역 이름이 다른 행 (총신대입구 4 ↔ 이수 7). 그래프는 역을 이름으로
+        묶어서 둘을 다른 역으로 본다 — 여기서 쓰면 엣지가 이어질 곳이 없다.
+    """
+    df = pd.read_csv(path, encoding="cp949", dtype=str)
+    df = df[
+        df["환승시작 호선"].str.fullmatch(r"\d")
+        & df["환승종료 호선"].str.fullmatch(r"\d")
+        & (df["환승시작역"] == df["환승종료역"])
+    ]
+    out = pd.DataFrame({
+        "station": df["환승시작역"].map(normalize_station),
+        "line_a": df["환승시작 호선"],
+        "line_b": df["환승종료 호선"],
+        "sec": df["소요시간"].map(lambda v: parse_hms(f"00:{v}") if isinstance(v, str) else np.nan),
+    }).dropna(subset=["sec"])
+    out = out[(out["line_a"] != out["line_b"]) & (out["sec"] != TRANSFER_PLACEHOLDER_SEC)]
+    pairs = out.groupby(["station", "line_a", "line_b"], as_index=False)["sec"].median()
+    pairs["sec"] = pairs["sec"].round().astype(int)
+    return pairs
+
+
+def calibrate_transfers(
+    measured: pd.DataFrame, distance: pd.DataFrame
+) -> tuple[pd.DataFrame, int, int]:
+    """두 환승 파일을 합친다. `(환승표, 보정초, 보정에 쓴 쌍 수)`.
+
+    MEASURED 에 있는 쌍은 그 값을 쓴다. 없는 쌍은 DISTANCE 값에 **보정초**를 더한다.
+
+    보정초는 두 파일에 다 있는 쌍에서 `MEASURED − DISTANCE` 의 중앙값이다(2025년 파일로
+    86쌍, +88초). DISTANCE 는 평지 보행이라 계단·에스컬레이터와 승강장을 걷는 시간이
+    빠져 있고, 그 몫이 거리와 거의 상관없이 붙는다 — 충무로 3→4 는 17m(14초)인데
+    MEASURED 는 101초다.
+
+    **보정하지 않으면 안 된다.** 1~8호선만 MEASURED 로 바꾸면 그쪽 환승은 평균 88초
+    비싸지고 9호선 환승만 싼 값으로 남아, 경로가 9호선으로 쏠린다. 정확도 이전에 두 값의
+    기준을 맞추는 일이다. 겹치는 쌍으로 하나씩 빼고 맞춰 보면 오차 중앙값이
+    88초 → 28초로 준다(회귀·깊이를 넣어도 27~29초로 나아지지 않는다).
+
+    가정은 하나다 — 9호선 환승의 고정 비용이 1~8호선과 같다. 9호선 1단계는 깊이 자료도
+    없어 확인할 수 없다.
+
+    `source` 칸에 MEASURED / CALIBRATED 를 남긴다.
+    """
+    keys = ["station", "line_a", "line_b"]
+    both = measured.merge(distance, on=keys, suffixes=("", "_dist"))
+    if both.empty:
+        raise ValueError("두 환승 파일에 겹치는 쌍이 없어 보정할 수 없다")
+    offset = int(round(float((both["sec"] - both["sec_dist"]).median())))
+
+    only_dist = distance.merge(measured[keys], on=keys, how="left", indicator=True)
+    only_dist = only_dist[only_dist["_merge"] == "left_only"][keys + ["sec"]]
+    calibrated = only_dist.assign(sec=only_dist["sec"] + offset, source="CALIBRATED")
+
+    table = pd.concat(
+        [measured[keys + ["sec"]].assign(source="MEASURED"), calibrated], ignore_index=True
+    )
+    table["sec"] = table["sec"].clip(lower=1).astype(int)
+    return table, offset, len(both)
 
 
 def subway_service_hours(timetable: pd.DataFrame) -> dict[tuple[str, str], set[int]]:
@@ -246,7 +330,7 @@ def station_traverse_seconds(transfers: pd.DataFrame) -> tuple[dict[str, int], i
     """역별 승강장 ↔ 대합실 이동시간(초). `(역명 → 초, 기본값)`.
 
     그 역의 환승 소요시간 중앙값의 절반으로 본다. 환승이 승강장 → 대합실 → 승강장 이므로
-    편도는 그 절반이라는 것이 유일한 가정이고, 나머지는 전부 실측값에서 온다.
+    편도는 그 절반이라는 것이 유일한 가정이고, 나머지는 전부 환승 데이터에서 온다.
 
     환승 데이터가 없는 역(단일 노선이라 환승할 일도 없다)은 전체 중앙값의 절반을 쓴다.
     """
@@ -498,7 +582,7 @@ def insert_board_alight_edges(
 
     양쪽 모두 **승강장 ↔ 대합실 이동시간**을 낸다. BOARD 에는 거기에 대기가 더 붙는다.
     이 이동시간이 없으면 정류장을 거쳐 노선을 바꾸는 쪽이 환승 통로보다 싸져
-    실측 환승 도보시간이 무시된다.
+    환승 도보시간이 무시된다.
 
     배차를 모르는 승강장에는 BOARD 를 만들지 않는다(대기를 지어내지 않는다). 내리는 것은 된다.
     """
@@ -547,7 +631,7 @@ def insert_transfer_edges(
     가중치는 **환승 도보 + 새 노선 대기** 다. 정류장을 경유하지 않으므로
     BOARD 를 지나지 않고, 따라서 대기가 이중으로 붙지 않는다.
 
-    급행 ↔ 완행도 여기를 지난다. 실측 데이터에 없는 쌍이라 EXPRESS_TRANSFER_SEC 를 쓰고,
+    급행 ↔ 완행도 여기를 지난다. 환승 데이터에 없는 쌍이라 EXPRESS_TRANSFER_SEC 를 쓰고,
     근거 없는 폴백(TRANSFER_FALLBACK_SEC)과 구분해 세지 않는다 — 값이 없어서 메운 것이
     아니라 다른 종류의 환승이라 다른 값을 쓰는 것이다.
     """
@@ -571,7 +655,7 @@ def insert_transfer_edges(
                     # 같은 호선의 급행 ↔ 완행. 호선을 바꾸는 것이 아니라 등급만 바꾼다.
                     walk = EXPRESS_TRANSFER_SEC
                 else:
-                    # 실측값은 급행/완행을 구분하지 않는다. 기준 호선으로 찾는다.
+                    # 환승 데이터는 급행/완행을 구분하지 않는다. 기준 호선으로 찾는다.
                     walk = lookup.get((key, base_line(a), base_line(b)))
                     if walk is None:
                         walk = TRANSFER_FALLBACK_SEC
@@ -730,7 +814,7 @@ def insert_bus_nodes_edges(
        BOARD 는 대기만, ALIGHT 는 1초다.
     2. **환승 엣지를 따로 두지 않는다.** 같은 정류장에서 다른 노선으로 갈아타는 것은
        실제로 그냥 기다리는 일이라 ALIGHT → BOARD 가 공짜인 것이 맞다.
-       지하철에서 이것이 버그였던 이유는 환승 통로를 걷는 실측 비용이 있었기 때문이다.
+       지하철에서 이것이 버그였던 이유는 환승 통로를 걷는 비용이 있었기 때문이다.
        버스 ↔ 지하철 환승은 보행망을 통해 자연스럽게 이어진다.
     """
     hour_cols = [f"운행시간_{h:02d}시" for h in range(24)]
@@ -1010,6 +1094,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timetable", default=TIMETABLE_PATH)
     parser.add_argument("--station-master", default=STATION_MASTER_PATH)
     parser.add_argument("--transfers", default=TRANSFER_PATH)
+    parser.add_argument("--measured-transfers", default=MEASURED_TRANSFER_PATH)
     parser.add_argument("--weektag", default="DAY")
     parser.add_argument("--area", default="Seoul, South Korea")
     parser.add_argument("--bus-sections", default=BUS_SECTION_PATH)
@@ -1023,7 +1108,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    needed = [args.graphml, args.timetable, args.station_master, args.transfers]
+    needed = [args.graphml, args.timetable, args.station_master, args.transfers,
+              args.measured_transfers]
     if not args.no_bus:
         needed += [args.bus_sections, args.bus_routes, args.bus_headways, args.bus_route_ids,
                    BUS_STOP_PATH]
@@ -1037,7 +1123,12 @@ def main(argv: list[str] | None = None) -> int:
     tt = load_timetable(args.timetable, args.weektag)
     legs = inter_station_times(tt)
     waits = board_weights_by_hour(headways_by_hour(tt), subway_service_hours(tt))
-    transfers = load_transfers(args.transfers)
+    transfers, offset, overlap = calibrate_transfers(
+        load_measured_transfers(args.measured_transfers), load_transfers(args.transfers)
+    )
+    n_cal = int((transfers["source"] == "CALIBRATED").sum())
+    print(f"  환승 측정 {len(transfers) - n_cal}쌍 · 보정 {n_cal}쌍 "
+          f"(거리÷1.2 에 +{offset}초 — 두 파일이 겹치는 {overlap}쌍의 중앙값)", flush=True)
 
     # 급행은 별도 노선이므로 급행이 서는 역에만 급행 플랫폼이 생긴다.
     raw_stations = (
@@ -1076,7 +1167,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  STOP {len(stop_node)} · PLATFORM {len(platform)}", flush=True)
 
             traverse, traverse_default = station_traverse_seconds(transfers)
-            print(f"  승강장↔대합실 {len(traverse)}역 실측 · 나머지 {traverse_default}초", flush=True)
+            print(f"  승강장↔대합실 {len(traverse)}역은 그 역 환승값에서 · 나머지 {traverse_default}초", flush=True)
 
             er = insert_ride_edges(conn, build_id, legs, platform)
             eb, ealight, unpriced = insert_board_alight_edges(

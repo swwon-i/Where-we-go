@@ -9,8 +9,11 @@ import numpy as np
 from etl.build_graph import (
     BUS_HOUR_COLS,
     NO_SERVICE,
+    TRANSFER_PLACEHOLDER_SEC,
     aggregate_bus_sections,
     board_weights_by_hour,
+    calibrate_transfers,
+    load_measured_transfers,
     hourly_literal,
     representative,
     split_unpriced_routes,
@@ -145,3 +148,87 @@ class TestSummarizeCounts:
 
     def test_missing_kind_is_zero(self):
         assert summarize_counts(self.ROWS)["edges_transfer"] == 0
+
+
+MEASURED_COLS = ["환승시작역", "환승시작 호선", "환승종료역", "환승종료 호선", "소요시간"]
+
+
+def _measured_csv(tmp_path, rows):
+    p = tmp_path / "measured.csv"
+    pd.DataFrame(rows, columns=MEASURED_COLS).to_csv(p, index=False, encoding="cp949")
+    return p
+
+
+class TestLoadMeasuredTransfers:
+    def test_median_over_doors(self, tmp_path):
+        """같은 쌍이 하차·승차 칸마다 여러 행이다. 쌍마다 중앙값 하나로 모은다."""
+        p = _measured_csv(tmp_path, [
+            ["서울역", "1", "서울역", "4", "03:30"],
+            ["서울역", "1", "서울역", "4", "03:34"],
+            ["서울역", "1", "서울역", "4", "03:40"],
+            ["서울역", "4", "서울역", "1", "02:00"],
+        ])
+        t = load_measured_transfers(p).set_index(["station", "line_a", "line_b"])["sec"]
+        assert t[("서울역", "1", "4")] == 214
+        assert t[("서울역", "4", "1")] == 120     # 방향은 원본 그대로 — 뒤집어 만들지 않는다
+
+    def test_placeholder_is_dropped(self, tmp_path):
+        """10:00 은 잰 값이 아니다. 9호선 1단계가 전부 이 값이다."""
+        assert TRANSFER_PLACEHOLDER_SEC == 600
+        p = _measured_csv(tmp_path, [
+            ["당산", "2", "당산", "9", "10:00"],
+            ["노량진", "1", "노량진", "9", "07:00"],
+        ])
+        t = load_measured_transfers(p)
+        assert list(t["station"]) == ["노량진"]
+
+    def test_non_numeric_lines_and_renamed_stations_are_dropped(self, tmp_path):
+        p = _measured_csv(tmp_path, [
+            ["서울역", "1", "서울역", "공항철도", "05:00"],
+            ["총신대입구", "4", "이수", "7", "02:51"],
+            ["시청", "1", "시청", "2", "03:32"],
+        ])
+        t = load_measured_transfers(p)
+        assert list(t["station"]) == ["시청"]
+
+
+def _pairs(rows):
+    return pd.DataFrame(rows, columns=["station", "line_a", "line_b", "sec"])
+
+
+class TestCalibrateTransfers:
+    measured = _pairs([["시청", "1", "2", 212], ["건대입구", "2", "7", 152], ["충무로", "3", "4", 101]])
+    distance = _pairs([
+        ["시청", "1", "2", 120], ["건대입구", "2", "7", 64], ["충무로", "3", "4", 14],
+        ["당산", "2", "9", 88],
+    ])
+
+    def test_measured_wins(self):
+        t, _, _ = calibrate_transfers(self.measured, self.distance)
+        t = t.set_index(["station", "line_a", "line_b"])
+        assert t.loc[("시청", "1", "2"), "sec"] == 212
+        assert t.loc[("시청", "1", "2"), "source"] == "MEASURED"
+
+    def test_offset_is_median_of_overlap(self):
+        """차이 92 · 88 · 87 의 중앙값 88. 상수를 박지 않고 겹치는 쌍에서 유도한다."""
+        _, offset, overlap = calibrate_transfers(self.measured, self.distance)
+        assert (offset, overlap) == (88, 3)
+
+    def test_missing_pair_is_calibrated(self):
+        """9호선처럼 측정값이 없는 쌍은 거리÷1.2 에 보정초를 더한다 — 싼 값 그대로 두면 경로가 쏠린다."""
+        t, _, _ = calibrate_transfers(self.measured, self.distance)
+        t = t.set_index(["station", "line_a", "line_b"])
+        assert t.loc[("당산", "2", "9"), "sec"] == 88 + 88
+        assert t.loc[("당산", "2", "9"), "source"] == "CALIBRATED"
+
+    def test_measured_only_pair_is_kept(self):
+        """거리 파일에 없는 쌍(노량진 1↔9)도 측정값이 있으면 쓴다."""
+        m = pd.concat([self.measured, _pairs([["노량진", "1", "9", 420]])])
+        t, _, _ = calibrate_transfers(m, self.distance)
+        assert ("노량진", "1", "9") in set(zip(t.station, t.line_a, t.line_b))
+        assert len(t) == 5
+
+    def test_no_overlap_is_an_error(self):
+        import pytest
+        with pytest.raises(ValueError):
+            calibrate_transfers(_pairs([["a", "1", "2", 100]]), _pairs([["b", "1", "2", 50]]))
