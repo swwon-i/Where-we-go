@@ -269,3 +269,47 @@ tr.rule.is-open { background: var(--panel); box-shadow: inset 3px 0 0 var(--acce
 .facts b { font-size: 16px; font-variant-numeric: tabular-nums; }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
 @media (max-width: 760px) { .two { grid-template-columns: 1fr; } .admin { padding: 16px 16px 40px; } }
+
+
+/* ── 장소 카드 (방 지도) ────────────────────────────────────────────────── */
+/* 지도 타일은 늘 밝은 색이라 카드도 밝은 바탕에 그림자를 준다. 다크 모드에서도 지도 위에서는
+   밝은 카드가 읽힌다 — 카카오맵 자체 카드도 그렇다. */
+/* 카드를 핀 위로 띄우는 아래 여백(42px)도 카카오가 씌우는 틀 안에 들어간다. 그 틀이 클릭을
+   받으면 카드 꼬리 바로 밑의 마커가 눌리지 않는다 — 틀은 통과시키고 카드 본체만 받는다. */
+div:has(> .place-card) { pointer-events: none; }
+.place-card {
+  pointer-events: auto;
+  position: relative; width: 260px; margin-bottom: 42px; padding: 12px 14px 10px;
+  background: #fff; color: #16181d; border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .18), 0 1px 3px rgba(0, 0, 0, .12);
+  font-size: 13px; line-height: 1.45; cursor: default; white-space: normal;
+}
+.place-card::after {
+  content: ''; position: absolute; left: 50%; bottom: -7px; width: 14px; height: 14px;
+  background: #fff; transform: translateX(-50%) rotate(45deg);
+  box-shadow: 3px 3px 4px rgba(0, 0, 0, .06);
+}
+.place-card .card-x {
+  position: absolute; top: 4px; right: 6px; border: 0; background: none; padding: 2px 6px;
+  font-size: 18px; line-height: 1; color: #9aa1ab; cursor: pointer;
+}
+.place-card .card-x:hover { color: #16181d; }
+.place-card .card-title { display: flex; align-items: baseline; gap: 6px; padding-right: 18px; flex-wrap: wrap; }
+.place-card .card-title b { font-size: 15px; color: #1d4ed8; }
+.place-card .card-cat { font-size: 12px; color: #6b7280; }
+.place-card .card-addr { margin-top: 4px; color: #374151; }
+.place-card .card-meta { margin-top: 2px; display: flex; gap: 8px; font-size: 12px; color: #6b7280; }
+.place-card .card-meta .ok { color: #059669; }
+.place-card .card-meta .warn { color: #e11d48; }
+.place-card .card-foot {
+  margin-top: 10px; padding-top: 8px; border-top: 1px solid #e5e7eb;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px;
+}
+.place-card .card-foot .meta { color: #6b7280; }
+.place-card .card-foot button {
+  padding: 5px 12px; font-size: 12px; border-radius: 6px; background: #fff; color: #16181d;
+  border: 1px solid #d1d5db;
+}
+.place-card .card-foot button.primary { border-color: #2563eb; color: #2563eb; font-weight: 600; }
+.place-card .card-foot button.primary:hover:not(:disabled) { background: #2563eb; color: #fff; }
+.place-card .card-foot button[data-act="remove"]:hover:not(:disabled) { border-color: #e11d48; color: #e11d48; }

@@ -128,6 +128,7 @@ export const api = {
   // ── 장소 ──────────────────────────────────────────────────────────────
   nearby: (params) => request('GET', `/places/nearby?${new URLSearchParams(params)}`),
   search: (params) => request('GET', `/places/search?${new URLSearchParams(params)}`),
+  place: (poiId) => request('GET', `/places/${poiId}`),
 
   clientConfig: () => request('GET', '/client-config'),
 

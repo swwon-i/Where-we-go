@@ -63,6 +63,13 @@ export function createMap(container, { lat, lng }, level = 5) {
 
   let markers = [];
   let infoWindow = null;
+  /** 떠 있는 정보 카드. 한 번에 하나만. */
+  let card = null;
+
+  function closeCard() {
+    card?.setMap(null);
+    card = null;
+  }
 
   /**
    * 컨테이너 크기가 바뀌면 지도에게 알려 준다.
@@ -95,9 +102,13 @@ export function createMap(container, { lat, lng }, level = 5) {
       markers.forEach((m) => m.setMap(null));
       markers = [];
       infoWindow?.close();
+      closeCard();
     },
 
-    /** @param {{lat:number,lng:number,label:string,color?:string,onClick?:Function}} spec */
+    /**
+     * @param {{lat:number,lng:number,label:string,color?:string,onClick?:Function}} spec
+     *   `onClick` 이 있으면 이름 말풍선 대신 그것을 부른다 — 부르는 쪽이 카드를 띄운다.
+     */
     addMarker({ lat: y, lng: x, label, color, onClick }) {
       const marker = new kakao.maps.Marker({
         map,
@@ -107,18 +118,48 @@ export function createMap(container, { lat, lng }, level = 5) {
       });
       kakao.maps.event.addListener(marker, 'click', () => {
         infoWindow?.close();
+        if (onClick) {
+          onClick();
+          return;
+        }
         infoWindow = new kakao.maps.InfoWindow({
           content: `<div class="pin-label">${label.replace(/[<>&"]/g, '')}</div>`,
         });
         infoWindow.open(map, marker);
-        onClick?.();
       });
       markers.push(marker);
       return marker;
     },
 
+    /**
+     * 좌표 위에 정보 카드를 띄운다. 핀 바로 위에 꼬리가 오도록 아래 가운데를 기준점으로 둔다.
+     *
+     * 카드 안을 누르거나 끌어도 지도가 그 클릭을 받지 않게 막는다 — 안 막으면 버튼을 누를 때
+     * 지도 클릭(출발지·후보 고르기)까지 같이 일어나고, 드래그하면 지도가 끌려간다.
+     *
+     * @param {HTMLElement} element 카드 내용
+     */
+    openCard({ lat: y, lng: x }, element) {
+      closeCard();
+      for (const type of ['mousedown', 'touchstart', 'click', 'dblclick', 'wheel']) {
+        element.addEventListener(type, (e) => e.stopPropagation());
+      }
+      card = new kakao.maps.CustomOverlay({
+        map,
+        position: new kakao.maps.LatLng(y, x),
+        content: element,
+        xAnchor: 0.5,
+        yAnchor: 1,
+        zIndex: 10,
+        clickable: true,
+      });
+    },
+
+    closeCard,
+
     onClick(handler) {
       kakao.maps.event.addListener(map, 'click', (e) => {
+        closeCard();  // 빈 곳을 누르면 카드를 닫는다
         handler({ lat: e.latLng.getLat(), lng: e.latLng.getLng() });
       });
     },
@@ -127,11 +168,17 @@ export function createMap(container, { lat, lng }, level = 5) {
       kakao.maps.event.addListener(map, 'dragend', handler);
     },
 
-    /** 모든 마커가 보이도록 맞춘다. 마커가 없으면 아무것도 하지 않는다. */
-    fit() {
-      if (!markers.length) return;
+    /**
+     * 모든 마커(또는 `points`)가 보이도록 맞춘다. 비어 있으면 아무것도 하지 않는다.
+     * @param {{lat:number,lng:number}[]} [points]
+     */
+    fit(points) {
+      const positions = points
+        ? points.map((p) => new kakao.maps.LatLng(p.lat, p.lng))
+        : markers.map((m) => m.getPosition());
+      if (!positions.length) return;
       const bounds = new kakao.maps.LatLngBounds();
-      markers.forEach((m) => bounds.extend(m.getPosition()));
+      positions.forEach((p) => bounds.extend(p));
       map.setBounds(bounds);
     },
   };
