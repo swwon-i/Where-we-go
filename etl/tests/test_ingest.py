@@ -18,6 +18,7 @@ from etl.ingest import (
     normalize_category,
     parse_date,
     transform_coords,
+    wait_for_db,
 )
 from etl.sources import KOREAN_HEADER, RAW_COLUMNS, SOURCES
 
@@ -152,3 +153,63 @@ class TestFileHash:
         p = tmp_path / "big"
         p.write_bytes(b"x" * 100_000)
         assert file_hash(p, chunk=1024) == file_hash(p, chunk=1 << 20)
+
+
+class FakeClock:
+    """sleep 을 부르면 그만큼 시간이 흐르는 가짜 시계."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.slept = []
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, sec):
+        self.slept.append(sec)
+        self.now += sec
+
+
+def flaky_connect(fail_times):
+    """처음 `fail_times` 번은 실패하고 그 뒤로는 닿는 접속 함수."""
+    calls = {"n": 0}
+
+    class Conn:
+        def close(self):
+            pass
+
+    def connect_fn():
+        calls["n"] += 1
+        if calls["n"] <= fail_times:
+            raise ConnectionError("connection refused")
+        return Conn()
+
+    return connect_fn
+
+
+class TestWaitForDb:
+    """절전에서 막 깨어나 Docker 가 아직 안 올라온 경우를 기다려 준다."""
+
+    def test_succeeds_after_docker_comes_up(self):
+        clock = FakeClock()
+        ok, attempts, waited, error = wait_for_db(
+            180, 15, connect_fn=flaky_connect(3), sleep=clock.sleep, clock=clock)
+        assert ok and attempts == 4 and waited == 45 and error is None
+
+    def test_gives_up_after_wait_budget(self):
+        """계속 꺼져 있으면 예산 안에서만 기다리고 물러난다 — 예산을 넘겨 자지 않는다."""
+        clock = FakeClock()
+        ok, attempts, waited, error = wait_for_db(
+            180, 15, connect_fn=flaky_connect(10**6), sleep=clock.sleep, clock=clock)
+        assert not ok
+        assert isinstance(error, ConnectionError)
+        assert waited <= 180
+        assert sum(clock.slept) <= 180
+        assert attempts == 13  # 0, 15, …, 180초에 시도
+
+    def test_zero_wait_tries_once(self):
+        """손으로 돌릴 때(기본 0)는 지금처럼 바로 포기한다."""
+        clock = FakeClock()
+        ok, attempts, _, _ = wait_for_db(
+            0, 15, connect_fn=flaky_connect(1), sleep=clock.sleep, clock=clock)
+        assert not ok and attempts == 1 and clock.slept == []

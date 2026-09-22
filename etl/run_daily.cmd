@@ -37,12 +37,16 @@ if not exist "%PY%" (
     exit /b 1
 )
 
-"%PY%" -X utf8 -m etl.ingest --source all >> "%LOG%" 2>&1
+rem --wait-db 180: a missed run starts the moment the lid opens, before Docker
+rem and WSL are back. Without waiting, the first connect fails and the day's
+rem run is lost looking exactly like "Docker was off".
+"%PY%" -X utf8 -m etl.ingest --source all --wait-db 180 >> "%LOG%" 2>&1
 set "CODE=%ERRORLEVEL%"
 
-rem 3 = could not reach the database. That means Docker was not running,
-rem     which is not an ingest failure. Report success so the scheduler
-rem     history does not fill with red rows, and so no FAILED run is recorded.
+rem 3 = could not reach the database even after waiting. That means Docker
+rem     was not running, which is not an ingest failure. Report success so the
+rem     scheduler history does not fill with red rows, and so no FAILED run is
+rem     recorded. The log line above says how many attempts and seconds it took.
 if "%CODE%"=="3" (
     echo database not reachable - skipped>> "%LOG%"
     set "CODE=0"

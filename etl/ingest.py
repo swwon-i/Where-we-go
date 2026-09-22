@@ -74,6 +74,41 @@ CHUNK_ROWS = 50_000
 #: DB 에 닿지 못해 적재를 시작조차 못한 경우. 스케줄러가 '실패'와 구분할 수 있게 별도 코드를 준다.
 EXIT_DB_UNAVAILABLE = 3
 
+#: DB 를 기다릴 때 다시 시도하는 간격(초).
+DB_RETRY_INTERVAL_SEC = 15
+
+
+def wait_for_db(
+    wait_sec: float,
+    interval_sec: float = DB_RETRY_INTERVAL_SEC,
+    *,
+    connect_fn=None,
+    sleep=time.sleep,
+    clock=time.monotonic,
+) -> tuple[bool, int, float, Exception | None]:
+    """DB 에 닿을 때까지 기다린다. `(닿았는가, 시도 횟수, 걸린 초, 마지막 오류)`.
+
+    일일 적재가 절전에서 깨어나자마자 돌면 Docker·WSL 이 아직 올라오지 않아 첫 접속이
+    실패한다. 한 번만 보고 물러나면 **도커를 안 켠 날과 구분되지 않는 채** 그날 회차를 잃는다.
+    `wait_sec` 동안 `interval_sec` 간격으로 다시 시도한다. 0 이면 한 번만 본다.
+
+    `connect_fn`·`sleep`·`clock` 은 시험용으로 바꿔 끼운다.
+    """
+    connect_fn = connect_fn or connect
+    start = clock()
+    attempts = 0
+    while True:
+        attempts += 1
+        try:
+            connect_fn().close()
+            return True, attempts, clock() - start, None
+        except Exception as e:  # noqa: BLE001 — 접속 실패 원인을 그대로 돌려준다
+            last = e
+        elapsed = clock() - start
+        if elapsed + interval_sec > wait_sec:
+            return False, attempts, elapsed, last
+        sleep(interval_sec)
+
 #: 서울을 넉넉히 감싸는 사각형(5186). **실제 행정경계가 아니다.**
 #: 검수 규칙이 아니라 좌표 변환이 깨졌는지 보는 계기판이며, 개별 건수가 아니라 자릿수를 본다.
 SEOUL_5186_BOUNDS = (170_000.0, 520_000.0, 230_000.0, 580_000.0)
@@ -578,6 +613,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=None, help="읽을 행 수 (시험용)")
     parser.add_argument("--force", action="store_true", help="해시가 같아도 다시 적재")
     parser.add_argument(
+        "--wait-db",
+        type=float,
+        default=0,
+        metavar="SEC",
+        help="DB 에 닿을 때까지 최대 몇 초 기다릴지. 일일 작업은 절전에서 막 깨어나 "
+             "Docker 가 아직 안 올라와 있을 수 있어 run_daily.cmd 가 180 을 준다. 기본 0(바로 포기)",
+    )
+    parser.add_argument(
         "--snapshot",
         default=None,
         help="원본 파일 경로를 덮어쓴다. 다른 회차 스냅샷을 넣거나 실패 격리를 시험할 때 쓴다. "
@@ -596,12 +639,15 @@ def main(argv: list[str] | None = None) -> int:
     # 매일 도는 작업이라, 도커를 안 켠 날마다 FAILED 회차가 쌓이면
     # /admin/ingest-runs 표가 '파이프라인이 자주 깨진다'처럼 읽힌다.
     # 적재를 시도하다 깨진 것과 아예 시작하지 못한 것은 다른 사건이다.
-    try:
-        connect().close()
-    except Exception as e:  # noqa: BLE001 — 접속 실패 원인을 그대로 보여준다
-        print(f"DB 에 접속하지 못했다: {e}", file=sys.stderr)
+    ok, attempts, waited, error = wait_for_db(args.wait_db)
+    if not ok:
+        # 몇 번·몇 초 시도했는지 남긴다. 도커를 안 켠 날(바로 실패)과 깨어나는 게
+        # 늦었던 날(기다리다 실패)을 로그만 보고 구분할 수 있어야 한다.
+        print(f"DB 에 접속하지 못했다 ({attempts}회 · {waited:.0f}초): {error}", file=sys.stderr)
         print("  docker compose up -d db 로 띄웠는지 확인할 것", file=sys.stderr)
         return EXIT_DB_UNAVAILABLE
+    if attempts > 1:
+        print(f"DB 접속 {attempts}회째 성공 ({waited:.0f}초 기다림)")
 
     with connect() as conn:
         for source in targets:
