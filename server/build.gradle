@@ -39,7 +39,27 @@ dependencies {
 }
 
 tasks.named('test') {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        // 성능 측정은 실제 그래프로 수 분 돈다. 평소 테스트에서는 빼고 perfTest 로만 돌린다.
+        excludeTags 'perf'
+    }
+}
+
+/*
+ * 성능 측정. 활성 그래프 빌드가 있는 DB 가 필요하다. 결과는 build/reports/perf/perf.md.
+ * 힙을 고정해 두어야 회차마다 GC 조건이 같다.
+ */
+tasks.register('perfTest', Test) {
+    description = '그래프 적재 · 다익스트라 · CSR 대 객체 · 행렬 API 성능 측정'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform {
+        includeTags 'perf'
+    }
+    maxHeapSize = '2g'
+    minHeapSize = '2g'
+    outputs.upToDateWhen { false }
 }
 
 /*
