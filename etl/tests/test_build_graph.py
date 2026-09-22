@@ -14,6 +14,7 @@ from etl.build_graph import (
     board_weights_by_hour,
     calibrate_transfers,
     load_measured_transfers,
+    platform_traverse_seconds,
     hourly_literal,
     representative,
     split_unpriced_routes,
@@ -182,14 +183,22 @@ class TestLoadMeasuredTransfers:
         t = load_measured_transfers(p)
         assert list(t["station"]) == ["노량진"]
 
-    def test_non_numeric_lines_and_renamed_stations_are_dropped(self, tmp_path):
+    def test_non_numeric_lines_are_dropped(self, tmp_path):
         p = _measured_csv(tmp_path, [
             ["서울역", "1", "서울역", "공항철도", "05:00"],
-            ["총신대입구", "4", "이수", "7", "02:51"],
             ["시청", "1", "시청", "2", "03:32"],
         ])
+        assert list(load_measured_transfers(p)["station"]) == ["시청"]
+
+    def test_one_station_with_two_names_is_kept(self, tmp_path):
+        """총신대입구 4 ↔ 이수 7 은 이름만 다른 같은 역이다. 그래프의 역 키로 묶어 남긴다."""
+        p = _measured_csv(tmp_path, [
+            ["총신대입구", "4", "이수", "7", "02:51"],
+            ["이수", "7", "총신대입구", "4", "02:51"],
+            ["서울역", "1", "시청", "2", "03:00"],     # 다른 역끼리는 환승이 아니다
+        ])
         t = load_measured_transfers(p)
-        assert list(t["station"]) == ["시청"]
+        assert set(zip(t.station, t.line_a, t.line_b)) == {("총신대입구", "4", "7"), ("총신대입구", "7", "4")}
 
 
 def _pairs(rows):
@@ -232,3 +241,35 @@ class TestCalibrateTransfers:
         import pytest
         with pytest.raises(ValueError):
             calibrate_transfers(_pairs([["a", "1", "2", 100]]), _pairs([["b", "1", "2", 50]]))
+
+
+class TestPlatformTraverseSeconds:
+    """대합실로 나갔다 다시 타는 길(ALIGHT + BOARD)이 환승 통로보다 싸면 환승값이 무시된다."""
+
+    # 종로3가를 줄인 것 — 1↔3, 3↔5 는 짧고 1↔5 만 길다
+    xfer = _pairs([
+        ["종로3가", "1", "3", 161], ["종로3가", "3", "1", 161],
+        ["종로3가", "3", "5", 170], ["종로3가", "5", "3", 170],
+        ["종로3가", "1", "5", 326], ["종로3가", "5", "1", 326],
+    ])
+
+    def test_every_pair_prefers_the_transfer(self):
+        t = platform_traverse_seconds(self.xfer, {"종로3가": 88}, 88)
+        for r in self.xfer.itertuples():
+            assert t[(r.station, r.line_a)] + t[(r.station, r.line_b)] > r.sec
+
+    def test_only_short_platforms_are_raised(self):
+        """1↔3 은 이미 맞으므로 3호선은 역 값 그대로다. 역 전체를 올리지 않는다."""
+        t = platform_traverse_seconds(self.xfer, {"종로3가": 88}, 88)
+        assert t[("종로3가", "3")] == 88
+        assert t[("종로3가", "1")] > 88 and t[("종로3가", "5")] > 88
+
+    def test_nothing_changes_when_already_fine(self):
+        t = platform_traverse_seconds(_pairs([["시청", "1", "2", 150], ["시청", "2", "1", 150]]),
+                                      {"시청": 88}, 88)
+        assert t == {("시청", "1"): 88, ("시청", "2"): 88}
+
+    def test_tie_is_broken_toward_the_transfer(self):
+        """같으면 어느 길을 탈지 정해지지 않는다 — 1초라도 대합실 쪽이 비싸야 한다."""
+        t = platform_traverse_seconds(_pairs([["군자", "5", "7", 176]]), {"군자": 88}, 88)
+        assert t[("군자", "5")] + t[("군자", "7")] == 177

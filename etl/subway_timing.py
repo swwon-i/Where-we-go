@@ -154,6 +154,25 @@ def normalize_station(name: object) -> str:
     return re.sub(r"\(.*?\)", "", str(name)).replace(" ", "").strip()
 
 
+#: 호선마다 이름이 다른 한 역. (정규화한 역명) -> (그래프에서 쓸 역명)
+#:
+#: 그래프는 역을 이름으로 묶는다(build_graph.load_stations). 시각표는 4호선을 「총신대입구」,
+#: 7호선을 「이수」로 적어 둘이 다른 역이 되고, 둘 사이 환승 엣지가 만들어지지 않았다.
+#: 환승 데이터(OA-22521)는 총신대입구 4 ↔ 이수 7 을 2분 51초로 잰 같은 역의 환승으로 본다.
+SAME_STATION: dict[str, str] = {
+    "이수": "총신대입구",
+}
+
+
+def station_key(name: object) -> str:
+    """그래프에서 역의 정체성으로 쓰는 키. 정규화한 역명에 SAME_STATION 을 얹는다.
+
+    좌표 매칭(join_station_coords)에는 쓰지 않는다 — 역사마스터는 호선별 이름을 그대로 쓴다.
+    """
+    key = normalize_station(name)
+    return SAME_STATION.get(key, key)
+
+
 def load_timetable(path: str | Path, weektag: str | None = "DAY") -> pd.DataFrame:
     """시각표를 읽어 초 단위 시각을 붙인다.
 

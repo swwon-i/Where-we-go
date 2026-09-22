@@ -23,6 +23,7 @@ from etl.subway_timing import (
     join_station_coords,
     normalize_station,
     parse_hms,
+    station_key,
 )
 
 
@@ -74,6 +75,19 @@ class TestNormalizeStation:
 
     def test_strips_spaces(self):
         assert normalize_station(" 서울 역 ") == "서울역"
+
+
+class TestStationKey:
+    def test_one_station_with_two_names(self):
+        """4호선 총신대입구와 7호선 이수는 한 역이다 — 그래프에서 같은 키여야 환승이 생긴다."""
+        assert station_key("이수") == station_key("총신대입구") == "총신대입구"
+
+    def test_other_names_are_just_normalized(self):
+        assert station_key("자양(뚝섬한강공원)") == "자양"
+
+    def test_coordinate_matching_keeps_line_names(self):
+        """좌표 매칭은 역사마스터가 호선별 이름을 쓰므로 묶지 않는다."""
+        assert normalize_station("이수") == "이수"
 
 
 class TestInterStationTimes:

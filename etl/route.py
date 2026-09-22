@@ -19,15 +19,18 @@ from dataclasses import dataclass, replace
 
 from etl.db import connect
 
-#: 환승으로 셀 엣지. 노선이 바뀌는 지점이다.
+#: 승차·환승 엣지. 노선이 바뀌는 지점이다.
 BOARDING_KINDS = {"BOARD", "TRANSFER"}
+
+#: 탈것 줄. 승차·환승 줄과 달리 주행만 담는다.
+RIDE_KINDS = {"SUBWAY", "BUS"}
 
 
 @dataclass(frozen=True)
 class Leg:
     """경로를 사람이 읽는 단위로 묶은 것. 같은 노선을 연속으로 타면 한 구간이다."""
 
-    kind: str          # WALK / SUBWAY / BUS
+    kind: str          # WALK / SUBWAY / BUS / BOARD(첫 승차 + 대기) / TRANSFER(갈아타기 + 대기)
     line: str | None   # 식별자. 버스는 '100100017' 이라 그대로 보여주면 안 된다
     seconds: int
     stops: int         # 정차 수 (탈것만)
@@ -48,7 +51,7 @@ class Route:
     @property
     def transfers(self) -> int:
         """환승 횟수. 탈것을 갈아탄 횟수이므로 처음 탄 것은 세지 않는다."""
-        rides = [l for l in self.legs if l.kind in ("SUBWAY", "BUS")]
+        rides = [l for l in self.legs if l.kind in RIDE_KINDS]
         return max(0, len(rides) - 1)
 
     @property
@@ -56,7 +59,7 @@ class Route:
         return sum(l.distance_m for l in self.legs if l.kind == "WALK")
 
     def summary(self) -> str:
-        lines = [l.label for l in self.legs if l.kind in ("SUBWAY", "BUS") and l.label]
+        lines = [l.label for l in self.legs if l.kind in RIDE_KINDS and l.label]
         route = " → ".join(lines) if lines else "도보"
         return (f"{self.total_sec // 60}분 {self.total_sec % 60}초 · "
                 f"환승 {self.transfers} · 도보 {self.walk_distance_m:.0f}m · {route}")
@@ -183,7 +186,14 @@ def dijkstra(graph: Graph, src: int, targets: set[int], hour: int | None = None)
 
 
 def build_route(graph: Graph, prev, dist, dst: int) -> Route | None:
-    """역추적한 엣지들을 사람이 읽는 구간으로 묶는다."""
+    """역추적한 엣지들을 사람이 읽는 구간으로 묶는다. 서버 RouteBuilder 와 같은 규칙이다.
+
+    - BOARD(승강장까지 + 대기)와 TRANSFER(환승 통로 + 대기)는 **각자 한 줄**이다. 탈것 줄은
+      주행만 담는다 — 얹으면 "2정차 10분"처럼 정차 수와 시간이 맞지 않는 줄이 나온다.
+    - 이미 한 번 탔다면 BOARD 엣지로 갈아타도 TRANSFER 줄이다. 버스끼리는 원래 BOARD 로만
+      갈아탄다.
+    - ALIGHT(승강장에서 올라오기)는 **이어지는 줄**에 붙인다. 이어지는 줄이 없으면 마지막 줄에.
+    """
     if dst not in dist:
         return None
 
@@ -196,54 +206,42 @@ def build_route(graph: Graph, prev, dist, dst: int) -> Route | None:
     steps.reverse()
 
     legs: list[Leg] = []
+    alighting = 0     # 아직 어느 줄에도 붙이지 않은 ALIGHT 시간
     for kind, line, w, node in steps:
         meta = graph.meta.get(node)
         mode = meta[1] if meta else None
         name = meta[3] if meta else None
+        # 식별자(`line`)는 그대로 두고 표시용 이름만 얹는다 — 노선을 가르는 키는 `line` 이다.
+        # 승차·환승 줄의 이름표는 타려는 노선이다.
+        line_name = graph.route_names.get((mode, line)) if line else None
 
         if kind in ("WALK", "ACCESS"):
+            meters = w * 1.2           # 거리는 걷는 시간에서만 — 올라오는 시간은 거리가 아니다
+            w += alighting
+            alighting = 0
             if legs and legs[-1].kind == "WALK":
                 last = legs[-1]
                 legs[-1] = Leg("WALK", None, last.seconds + w, 0,
-                               last.distance_m + w * 1.2, name or last.to_name)
+                               last.distance_m + meters, name or last.to_name)
             else:
-                legs.append(Leg("WALK", None, w, 0, w * 1.2, name))
-            continue
-
-        if kind == "RIDE":
+                legs.append(Leg("WALK", None, w, 0, meters, name))
+        elif kind == "RIDE":
             label = "SUBWAY" if mode == "SUBWAY" else "BUS"
             if legs and legs[-1].kind == label and legs[-1].line == line:
                 last = legs[-1]
-                legs[-1] = Leg(label, line, last.seconds + w, last.stops + 1, 0.0, name)
+                legs[-1] = replace(last, seconds=last.seconds + w, stops=last.stops + 1, to_name=name)
             else:
-                legs.append(Leg(label, line, w, 1, 0.0, name))
-            continue
-
-        # BOARD / TRANSFER / ALIGHT — 대기와 환승은 다음 탈것에 얹는다
-        if kind in BOARDING_KINDS:
-            label = "SUBWAY" if mode == "SUBWAY" else "BUS"
-            legs.append(Leg(label, line, w, 0, 0.0, name))
-        elif legs:
-            legs[-1] = Leg(legs[-1].kind, legs[-1].line, legs[-1].seconds + w,
-                           legs[-1].stops, legs[-1].distance_m, name)
-
-    merged: list[Leg] = []
-    for leg in legs:
-        if merged and merged[-1].kind == leg.kind and merged[-1].line == leg.line:
-            last = merged.pop()
-            merged.append(Leg(last.kind, last.line, last.seconds + leg.seconds,
-                              last.stops + leg.stops, last.distance_m + leg.distance_m,
-                              leg.to_name or last.to_name))
-        else:
-            merged.append(leg)
-
-    # 식별자는 그대로 두고 표시용 이름만 얹는다 — 노선을 구분하는 키는 여전히 `line` 이다.
-    named = [
-        leg if leg.line is None else
-        replace(leg, line_name=graph.route_names.get((leg.kind, leg.line)))
-        for leg in merged
-    ]
-    return Route(dist[dst], named)
+                legs.append(Leg(label, line, w, 1, 0.0, name, line_name))
+        elif kind in BOARDING_KINDS:
+            rode = any(l.kind in RIDE_KINDS for l in legs)
+            label = "TRANSFER" if kind == "TRANSFER" or rode else "BOARD"
+            legs.append(Leg(label, line, w + alighting, 0, 0.0, name, line_name))
+            alighting = 0
+        else:  # ALIGHT
+            alighting += w
+    if alighting and legs:
+        legs[-1] = replace(legs[-1], seconds=legs[-1].seconds + alighting)
+    return Route(dist[dst], legs)
 
 
 def route_between(graph: Graph, src: int, dst: int, hour: int | None = None) -> Route | None:
@@ -288,13 +286,15 @@ def main(argv: list[str] | None = None) -> int:
     hour_note = f" ({args.hour}시대)" if args.hour is not None else ""
     print(f"\n{src_label} → {dst_label}{hour_note}")
     print(f"  {route.summary()}\n")
+    labels = {"WALK": "도보", "SUBWAY": "지하철", "BUS": "버스", "BOARD": "승차", "TRANSFER": "환승"}
     for leg in route.legs:
+        head = f"  {labels[leg.kind]:<4} {leg.seconds:>5}초"
         if leg.kind == "WALK":
-            print(f"  도보     {leg.seconds:>4}초  {leg.distance_m:>5.0f}m")
+            print(f"{head}  {leg.distance_m:>5.0f}m")
+        elif leg.kind in RIDE_KINDS:
+            print(f"{head}  {leg.label or '':<10} {leg.stops}정차 → {leg.to_name or ''}")
         else:
-            label = "지하철" if leg.kind == "SUBWAY" else "버스  "
-            print(f"  {label}  {leg.seconds:>4}초  {leg.label or '':<10} "
-                  f"{leg.stops}정차 → {leg.to_name or ''}")
+            print(f"{head}  {leg.label or '':<10} @ {leg.to_name or ''}")
     return 0
 
 

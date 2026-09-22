@@ -46,7 +46,7 @@ from etl.subway_timing import (
     is_express,
     join_station_coords,
     load_timetable,
-    normalize_station,
+    station_key,
     parse_hms,
 )
 
@@ -144,6 +144,12 @@ BUS_SERVICE_MIN_SHARE = 0.5
 #:     환승 통로       =                                    환승도보 +            대기
 #: 항상 2·ACCESS 만큼 비싸다. 역마다 환승시간이 달라도 깨지지 않는다 —
 #: 전역 상수를 쓰면 환승 262초짜리 역(최대값)에서 뒤집힌다.
+#:
+#: **대합실에서 바로 다시 타는 길은 이것으로 보장되지 않는다.**
+#:     대합실 경유 = ALIGHT(a) + BOARD(b) = T(a) + T(b) + 대기
+#: 역 하나에 T 하나면 이 값은 그 역 환승값의 중앙값이라, 중앙값보다 긴 쌍은 대합실 쪽이
+#: 싸다(종로3가 1→5 는 326초인데 176초로 갈아타졌다). 그래서 T 를 승강장마다 두고,
+#: 모자란 쌍에서만 올린다 — platform_traverse_seconds.
 STATION_TRAVERSE_RATIO = 0.5
 
 #: 역 ↔ 보행망 스냅이 이보다 멀면 경고한다. 역 출입구가 보행망에 안 잡힌 것이다.
@@ -187,7 +193,7 @@ def load_transfers(path: str | Path) -> pd.DataFrame:
     df = pd.read_csv(path, encoding="cp949", dtype=str)
     df["line_a"] = df["호선"].str.strip()
     df["line_b"] = df["환승노선"].map(normalize_line)
-    df["station"] = df["환승역명"].map(normalize_station)
+    df["station"] = df["환승역명"].map(station_key)
     df["sec"] = df["환승소요시간"].map(lambda v: parse_hms(f"00:{v}") if isinstance(v, str) else np.nan)
 
     ok = df.dropna(subset=["line_b", "sec"])
@@ -210,17 +216,17 @@ def load_measured_transfers(path: str | Path) -> pd.DataFrame:
     버리는 것:
       - 10:00 자리값 (TRANSFER_PLACEHOLDER_SEC)
       - 숫자 호선이 아닌 쪽 (공항철도·신림선 등 — 시각표에 없어 그래프에 없다)
-      - 출발역과 도착역 이름이 다른 행 (총신대입구 4 ↔ 이수 7). 그래프는 역을 이름으로
-        묶어서 둘을 다른 역으로 본다 — 여기서 쓰면 엣지가 이어질 곳이 없다.
+      - 출발역과 도착역이 다른 역인 행. 총신대입구 4 ↔ 이수 7 은 이름만 다른 같은 역이라
+        station_key 가 하나로 묶어 남는다(SAME_STATION).
     """
     df = pd.read_csv(path, encoding="cp949", dtype=str)
     df = df[
         df["환승시작 호선"].str.fullmatch(r"\d")
         & df["환승종료 호선"].str.fullmatch(r"\d")
-        & (df["환승시작역"] == df["환승종료역"])
+        & (df["환승시작역"].map(station_key) == df["환승종료역"].map(station_key))
     ]
     out = pd.DataFrame({
-        "station": df["환승시작역"].map(normalize_station),
+        "station": df["환승시작역"].map(station_key),
         "line_a": df["환승시작 호선"],
         "line_b": df["환승종료 호선"],
         "sec": df["소요시간"].map(lambda v: parse_hms(f"00:{v}") if isinstance(v, str) else np.nan),
@@ -278,7 +284,7 @@ def subway_service_hours(timetable: pd.DataFrame) -> dict[tuple[str, str], set[i
     hour = (timetable["arrive_sec"] // 3600).astype(int) % 24
     keyed = pd.DataFrame({
         "line": timetable["line_key"],
-        "key": timetable["STATION_NM"].map(normalize_station),
+        "key": timetable["STATION_NM"].map(station_key),
         "hour": hour,
     }).drop_duplicates()
     return {k: set(g["hour"]) for k, g in keyed.groupby(["line", "key"])}
@@ -298,7 +304,7 @@ def board_weights_by_hour(
     방향(상/하행)은 합친다. 플랫폼 노드가 (역 × 노선) 이라 방향을 나누지 않기 때문이다 —
     나누면 노드가 배로 늘고, 배차는 방향별 차이가 크지 않다.
     """
-    keyed = headways.assign(key=headways["station"].map(normalize_station))
+    keyed = headways.assign(key=headways["station"].map(station_key))
     out: dict[tuple[str, str], list[int]] = {}
     for (line, key), group in keyed.groupby(["line", "key"]):
         per_hour = group.groupby("hour")["headway_sec"].median()
@@ -340,6 +346,38 @@ def station_traverse_seconds(transfers: pd.DataFrame) -> tuple[dict[str, int], i
         {k: max(1, round(v * STATION_TRAVERSE_RATIO)) for k, v in per_station.items()},
         default,
     )
+
+
+def platform_traverse_seconds(
+    transfers: pd.DataFrame, traverse: dict[str, int], default: int
+) -> dict[tuple[str, str], int]:
+    """(역명, 기준 호선) → 승강장 ↔ 대합실 이동시간. 역 값에서 시작해 모자란 승강장만 올린다.
+
+    조건은 모든 환승 쌍에서 `T(a) + T(b) > 환승도보(a→b)` — 대합실로 나갔다 다시 타는 쪽이
+    환승 통로보다 1초라도 비싸야 한다. 같으면 탐색이 어느 쪽을 고를지 정해지지 않는다.
+
+    모자라면 차이를 두 승강장에 반씩 나눠 올린다. 한 쌍만 긴 역(종로3가 1↔5)에서 역 전체를
+    올리면 그 역에서 타고 내리는 모든 경로가 비싸진다. 올리기만 하므로 이미 맞춘 쌍이 다시
+    깨지지 않고, 반복은 몇 바퀴 안에 끝난다.
+
+    여기 없는 승강장은 `traverse` 의 역 값(또는 `default`)을 쓴다.
+    """
+    t: dict[tuple[str, str], int] = {}
+    for r in transfers.itertuples():
+        for line in (r.line_a, r.line_b):
+            t.setdefault((r.station, line), traverse.get(r.station, default))
+
+    changed = True
+    while changed:
+        changed = False
+        for r in transfers.itertuples():
+            a, b = (r.station, r.line_a), (r.station, r.line_b)
+            short = int(r.sec) + 1 - (t[a] + t[b])
+            if short > 0:
+                t[a] += (short + 1) // 2
+                t[b] += short // 2
+                changed = True
+    return t
 
 
 def summarize_snap(distances: list[float]) -> dict:
@@ -438,17 +476,21 @@ def load_stations(conn, stations: pd.DataFrame) -> dict[str, int]:
         )
         copy_rows(
             cur, "_stop", ["key", "name", "lng", "lat"],
-            ((normalize_station(r.station), r.station, r.lng, r.lat)
+            ((station_key(r.station), r.station, r.lng, r.lat)
              for r in stations.itertuples()),
         )
         # 같은 역이 노선마다 조금씩 다른 좌표를 갖는다(출입구 위치). 평균을 쓴다.
         cur.execute(
             """
             INSERT INTO transit_stop (mode, source_id, name, geom)
-            SELECT 'SUBWAY', key, min(name),
+            SELECT 'SUBWAY', key,
+                   -- 이름이 여럿인 한 역(SAME_STATION)은 「총신대입구(이수)」로 보인다
+                   CASE WHEN count(DISTINCT name) > 1
+                        THEN key || '(' || string_agg(DISTINCT name, ',') FILTER (WHERE name <> key) || ')'
+                        ELSE min(name) END,
                    ST_Transform(ST_SetSRID(ST_MakePoint(avg(lng), avg(lat)), 4326), %s)
             FROM _stop GROUP BY key
-            ON CONFLICT (mode, source_id) DO NOTHING
+            ON CONFLICT (mode, source_id) DO UPDATE SET name = EXCLUDED.name, geom = EXCLUDED.geom
             """,
             (TARGET_EPSG,),
         )
@@ -510,13 +552,16 @@ def insert_transit_nodes(
     """
     with conn.cursor() as cur:
         # STOP — 역 하나당 1개. 진출입과 환승의 허브.
+        # 이번 시각표에 있는 역만. transit_stop 은 빌드를 넘어 남으므로 역명이 바뀌면(이수 →
+        # 총신대입구) 옛 행이 남는다 — 전부 넣으면 엣지 없는 고립 노드가 된다.
+        keys = sorted(set(stations["station"].map(station_key)))
         cur.execute(
             """
             INSERT INTO graph_node (build_id, kind, source_id, stop_id, geom)
             SELECT %s, 'STOP', s.source_id, s.id, s.geom
-            FROM transit_stop s WHERE s.mode = 'SUBWAY'
+            FROM transit_stop s WHERE s.mode = 'SUBWAY' AND s.source_id = ANY(%s)
             """,
-            (build_id,),
+            (build_id, keys),
         )
         cur.execute(
             "SELECT source_id, id FROM graph_node WHERE build_id = %s AND kind = 'STOP'",
@@ -525,7 +570,7 @@ def insert_transit_nodes(
         stop_node = dict(cur.fetchall())
 
         # PLATFORM — (역명, 노선). 계획서의 "노선별 역 노드 복제"가 이것이다.
-        pairs = stations.assign(key=stations["station"].map(normalize_station))
+        pairs = stations.assign(key=stations["station"].map(station_key))
         pairs = pairs.drop_duplicates(["key", "line"])
         cur.execute("CREATE TEMP TABLE _pf (key text, line text) ON COMMIT DROP")
         copy_rows(cur, "_pf", ["key", "line"], ((r.key, r.line) for r in pairs.itertuples()))
@@ -554,8 +599,8 @@ def insert_ride_edges(conn, build_id: int, legs: pd.DataFrame, platform: dict) -
     일부러 그렇게 잡은 값이므로 여기서 빼지 않는다.
     """
     keyed = legs.assign(
-        a=legs["from_station"].map(normalize_station),
-        b=legs["to_station"].map(normalize_station),
+        a=legs["from_station"].map(station_key),
+        b=legs["to_station"].map(station_key),
     )
     merged = keyed.groupby(["line", "a", "b"])["run_sec"].median().round().astype(int)
 
@@ -577,6 +622,7 @@ def insert_ride_edges(conn, build_id: int, legs: pd.DataFrame, platform: dict) -
 def insert_board_alight_edges(
     conn, build_id: int, platform: dict, stop_node: dict, waits: dict,
     traverse: dict[str, int], traverse_default: int,
+    platform_traverse: dict[tuple[str, str], int] | None = None,
 ) -> tuple[int, int]:
     """STOP → PLATFORM(BOARD)와 그 반대(ALIGHT). `(BOARD 수, ALIGHT 수, 배차 몰라 뺀 승강장 수)`.
 
@@ -587,6 +633,11 @@ def insert_board_alight_edges(
     배차를 모르는 승강장에는 BOARD 를 만들지 않는다(대기를 지어내지 않는다). 내리는 것은 된다.
     """
     unpriced = 0
+    platform_traverse = platform_traverse or {}
+
+    def walk_of(key: str, line: str) -> int:
+        # 급행 승강장은 같은 호선 완행과 같은 자리다 — 기준 호선으로 찾는다.
+        return platform_traverse.get((key, base_line(line)), traverse.get(key, traverse_default))
 
     def board_rows():
         nonlocal unpriced
@@ -598,7 +649,7 @@ def insert_board_alight_edges(
             if not hours:
                 unpriced += 1
                 continue
-            walk = traverse.get(key, traverse_default)
+            walk = walk_of(key, line)
             yield (build_id, sid, pid, "BOARD", walk + representative(hours),
                    hourly_literal(hours, walk), line)
 
@@ -607,7 +658,7 @@ def insert_board_alight_edges(
             sid = stop_node.get(key)
             if sid is not None:
                 # 내릴 때는 기다릴 것이 없다. 승강장에서 대합실까지 올라오는 시간만 낸다.
-                yield (build_id, pid, sid, "ALIGHT", traverse.get(key, traverse_default), line)
+                yield (build_id, pid, sid, "ALIGHT", walk_of(key, line), line)
 
     with conn.cursor() as cur:
         b = copy_rows(
@@ -1168,10 +1219,17 @@ def main(argv: list[str] | None = None) -> int:
 
             traverse, traverse_default = station_traverse_seconds(transfers)
             print(f"  승강장↔대합실 {len(traverse)}역은 그 역 환승값에서 · 나머지 {traverse_default}초", flush=True)
+            per_platform = platform_traverse_seconds(transfers, traverse, traverse_default)
+            raised = {k: v - traverse.get(k[0], traverse_default) for k, v in per_platform.items()}
+            ties = sum(1 for d in raised.values() if d == 1)
+            big = sorted(((k, d) for k, d in raised.items() if d > 1), key=lambda kd: -kd[1])
+            print(f"  대합실 경유가 환승보다 싸지 않게 올린 승강장 {ties + len(big)}개 "
+                  f"(동점 깨기 +1초 {ties}개) "
+                  + ", ".join(f"{k[0]}·{k[1]} +{d}" for k, d in big), flush=True)
 
             er = insert_ride_edges(conn, build_id, legs, platform)
             eb, ealight, unpriced = insert_board_alight_edges(
-                conn, build_id, platform, stop_node, waits, traverse, traverse_default
+                conn, build_id, platform, stop_node, waits, traverse, traverse_default, per_platform
             )
             et, fallback = insert_transfer_edges(
                 conn, build_id, stations, platform, transfers, waits

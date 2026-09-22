@@ -237,3 +237,64 @@ class TestRouteSummary:
         route = Route(300, [Leg("WALK", None, 300, 0, 360.0, None)])
         assert "도보" in route.summary()
         assert route.transfers == 0
+
+
+class TestLegRows:
+    """서버 RouteBuilder 와 같은 줄 나눔 — 승차·환승은 각자 한 줄, 탈것 줄은 주행만."""
+
+    META = {
+        10: ("STOP", "SUBWAY", None, "강남"),
+        11: ("PLATFORM", "SUBWAY", "2", "강남"),
+        12: ("PLATFORM", "SUBWAY", "2", "교대"),
+        13: ("PLATFORM", "SUBWAY", "3", "교대"),
+        14: ("PLATFORM", "SUBWAY", "3", "남부터미널"),
+        15: ("STOP", "SUBWAY", None, "남부터미널"),
+        16: ("STOP", "SUBWAY", None, "교대"),
+    }
+
+    def route(self, edges, dst):
+        g = make_graph(edges, self.META)
+        dist, prev, _ = dijkstra(g, 10, {dst})
+        return build_route(g, prev, dist, dst)
+
+    def test_board_and_transfer_are_own_rows(self):
+        r = self.route([
+            (10, 11, 90, "BOARD", "2"), (11, 12, 100, "RIDE", "2"),
+            (12, 13, 150, "TRANSFER", "3"), (13, 14, 120, "RIDE", "3"),
+            (14, 15, 40, "ALIGHT", "3"), (15, 99, 60, "ACCESS", None),
+        ], 99)
+        assert [l.kind for l in r.legs] == ["BOARD", "SUBWAY", "TRANSFER", "SUBWAY", "WALK"]
+        assert [l.seconds for l in r.legs][:4] == [90, 100, 150, 120]
+
+    def test_alight_goes_to_the_next_row(self):
+        """승강장에서 올라오는 40초는 3호선 주행이 아니라 역을 걸어 나가는 줄에 붙는다."""
+        r = self.route([
+            (10, 11, 90, "BOARD", "2"), (11, 12, 100, "RIDE", "2"),
+            (12, 13, 150, "TRANSFER", "3"), (13, 14, 120, "RIDE", "3"),
+            (14, 15, 40, "ALIGHT", "3"), (15, 99, 60, "ACCESS", None),
+        ], 99)
+        walk = r.legs[-1]
+        assert walk.seconds == 100
+        assert walk.distance_m == pytest.approx(72.0)   # 거리는 걷는 60초에서만
+
+    def test_rows_add_up_to_total(self):
+        r = self.route([
+            (10, 11, 90, "BOARD", "2"), (11, 12, 100, "RIDE", "2"),
+            (12, 16, 44, "ALIGHT", "2"), (16, 13, 200, "BOARD", "3"), (13, 14, 120, "RIDE", "3"),
+        ], 14)
+        assert sum(l.seconds for l in r.legs) == r.total_sec
+
+    def test_reboarding_through_the_concourse_is_a_transfer(self):
+        """대합실로 나갔다 다시 타도(ALIGHT → BOARD) 사용자에게는 갈아타는 일이다."""
+        r = self.route([
+            (10, 11, 90, "BOARD", "2"), (11, 12, 100, "RIDE", "2"),
+            (12, 16, 44, "ALIGHT", "2"), (16, 13, 200, "BOARD", "3"), (13, 14, 120, "RIDE", "3"),
+        ], 14)
+        assert [l.kind for l in r.legs] == ["BOARD", "SUBWAY", "TRANSFER", "SUBWAY"]
+        assert r.legs[2].seconds == 244       # 올라온 44초 + 다시 내려가 기다린 200초
+        assert r.transfers == 1
+
+    def test_route_ending_at_station_keeps_alight(self):
+        r = self.route([(10, 11, 90, "BOARD", "2"), (11, 12, 100, "RIDE", "2"),
+                        (12, 16, 44, "ALIGHT", "2")], 16)
+        assert r.legs[-1].seconds == 144 and r.total_sec == 234

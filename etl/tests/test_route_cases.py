@@ -88,9 +88,9 @@ class TestSubwayTransfer:
         2→5호선이 1초에 갈아타지는 버그가 있었다.
         """
         route = route_between(graph, graph.stop("잠실"), graph.stop("광화문"))
-        second = [l for l in route.legs if l.kind == "SUBWAY"][1]
+        transfer = [l for l in route.legs if l.kind == "TRANSFER"][0]
         # 환승 도보 + 대기가 함께 붙으므로 대기만 있을 때보다 확실히 크다
-        assert second.seconds > 120
+        assert transfer.seconds > 120
 
 
 class TestWalkOnly:
