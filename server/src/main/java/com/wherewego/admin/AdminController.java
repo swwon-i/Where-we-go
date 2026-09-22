@@ -90,7 +90,7 @@ public class AdminController {
     public GraphStats graphStats() {
         var builds = repository.graphBuilds(20);
         var active = builds.stream().filter(AdminRepository.GraphBuild::active).findFirst().orElse(null);
-        var counts = active == null ? List.<AdminRepository.ModeCount>of() : repository.modeBreakdown(active.id());
+        var counts = active == null ? List.<AdminRepository.ModeCount>of() : active.counts();
         return new GraphStats(active, counts, builds);
     }
 

@@ -6,17 +6,13 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-/**
- * 파이프라인 기록 조회. ETL 이 쌓아 둔 테이블을 읽기만 한다 — 여기서 새로 계산하는 값은
- * 그래프의 수단별 개수 하나뿐이다({@link #modeBreakdown}).
- */
+/** 파이프라인 기록 조회. ETL 이 쌓아 둔 테이블을 읽기만 하고, 새로 계산하는 값은 없다. */
 @Repository
 public class AdminRepository {
 
@@ -26,9 +22,6 @@ public class AdminRepository {
 
     private final NamedParameterJdbcTemplate jdbc;
     private final JsonMapper json = JsonMapper.builder().build();
-
-    /** 빌드 번호 → 수단별 개수. 빌드는 한 번 만들어지면 바뀌지 않으므로 한 번만 센다. */
-    private final Map<Long, List<ModeCount>> breakdownCache = new ConcurrentHashMap<>();
 
     public AdminRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -167,7 +160,12 @@ public class AdminRepository {
 
     // ── 그래프 ────────────────────────────────────────────────────────────
 
-    /** 그래프 빌드 기록 한 줄. */
+    /**
+     * 그래프 빌드 기록 한 줄.
+     *
+     * @param counts 노드·엣지를 종류 × 수단으로 센 것. 빌드가 끝날 때 ETL 이 그래프 테이블에서
+     *     직접 센다(V11 이전 빌드는 비어 있을 수 있다)
+     */
     public record GraphBuild(
             long id,
             String status,
@@ -178,7 +176,8 @@ public class AdminRepository {
             OffsetDateTime startedAt,
             OffsetDateTime finishedAt,
             Long durationMs,
-            String errorMessage) {}
+            String errorMessage,
+            List<ModeCount> counts) {}
 
     public List<GraphBuild> graphBuilds(int limit) {
         return jdbc.query("SELECT * FROM graph_build ORDER BY id DESC LIMIT :limit",
@@ -193,7 +192,8 @@ public class AdminRepository {
                         rs.getObject("started_at", OffsetDateTime.class),
                         rs.getObject("finished_at", OffsetDateTime.class),
                         rs.getObject("duration_ms", Long.class),
-                        rs.getString("error_message")));
+                        rs.getString("error_message"),
+                        modeCounts(rs.getString("counts"))));
     }
 
     /**
@@ -204,45 +204,21 @@ public class AdminRepository {
     public record ModeCount(String what, String kind, String mode, long count) {}
 
     /**
-     * 빌드의 수단별 노드·엣지 수.
-     *
-     * <p>{@code graph_build} 의 개수 컬럼으로 대신하지 않는 이유 — 그 컬럼은 버스를 넣기 전에
-     * 만들어져 <b>지하철만</b> 센다(정류장 402 · 플랫폼 562 로 기록되는데 버스 정류장 11,042 ·
-     * 플랫폼 36,606 이 빠져 있다). 그래프 테이블에서 직접 센다. 0.4초쯤 걸려 빌드마다 한 번만 센다.
-     *
-     * <p>엣지의 수단은 도착 노드가 걸린 정류장의 수단이다. 보행망에서 역으로 들어가는 ACCESS 는
-     * 역 쪽 수단을, 역에서 보행망으로 나오는 ACCESS 는 보행({@code WALK})으로 센다.
+     * {@code graph_build.counts} JSON → 목록. 엣지의 수단은 도착 노드가 걸린 정류장의 수단이다
+     * (역에서 보행망으로 나오는 ACCESS 는 {@code WALK}).
      */
-    public List<ModeCount> modeBreakdown(long buildId) {
-        return breakdownCache.computeIfAbsent(buildId, this::countModes);
-    }
-
-    private List<ModeCount> countModes(long buildId) {
-        var params = new MapSqlParameterSource("build", buildId);
-        var nodes = jdbc.query("""
-                SELECT 'NODE' AS what, n.kind, coalesce(s.mode, 'WALK') AS mode, count(*) AS n
-                FROM graph_node n LEFT JOIN transit_stop s ON s.id = n.stop_id
-                WHERE n.build_id = :build
-                GROUP BY n.kind, s.mode
-                """, params, AdminRepository::modeCount);
-        var edges = jdbc.query("""
-                SELECT 'EDGE' AS what, e.kind, coalesce(s.mode, 'WALK') AS mode, count(*) AS n
-                FROM graph_edge e
-                JOIN graph_node t ON t.id = e.to_node_id
-                LEFT JOIN transit_stop s ON s.id = t.stop_id
-                WHERE e.build_id = :build
-                GROUP BY e.kind, s.mode
-                """, params, AdminRepository::modeCount);
-        var all = new java.util.ArrayList<ModeCount>(nodes);
-        all.addAll(edges);
-        return List.copyOf(all);
+    private List<ModeCount> modeCounts(String text) {
+        if (text == null) return List.of();
+        var out = new java.util.ArrayList<ModeCount>();
+        for (JsonNode c : json.readTree(text)) {
+            out.add(new ModeCount(
+                    c.get("what").asString(), c.get("kind").asString(),
+                    c.get("mode").asString(), c.get("count").asLong()));
+        }
+        return List.copyOf(out);
     }
 
     // ── 공통 ──────────────────────────────────────────────────────────────
-
-    private static ModeCount modeCount(ResultSet rs, int i) throws SQLException {
-        return new ModeCount(rs.getString("what"), rs.getString("kind"), rs.getString("mode"), rs.getLong("n"));
-    }
 
     private static Integer integer(ResultSet rs, String column) throws SQLException {
         return rs.getObject(column, Integer.class);

@@ -190,5 +190,13 @@ class AdminFlowTest {
         var modes = new java.util.HashSet<String>();
         stats.get("counts").forEach(c -> modes.add(c.get("mode").asString()));
         assertThat(modes).contains("SUBWAY", "WALK");
+        // 합계 칸도 버스까지 들어 있어야 한다 — 예전 기록은 정류장 402(지하철만)였다
+        long stops = 0;
+        for (var c : stats.get("counts")) {
+            if ("NODE".equals(c.get("what").asString()) && "STOP".equals(c.get("kind").asString())) {
+                stops += c.get("count").asLong();
+            }
+        }
+        assertThat(stops).isGreaterThan(402);
     }
 }

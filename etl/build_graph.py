@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import csv
 import io
+import json
 import re
 import sys
 import time
@@ -915,23 +916,87 @@ def insert_access_edges(conn, build_id: int) -> tuple[int, list[float], int]:
     return len(kept) * 2, kept, skipped
 
 
-def finish_build(conn, build_id: int, stats: dict, duration_ms: int) -> None:
+#: 빌드 규모를 그래프 테이블에서 직접 센다. 종류 × 수단. 엣지의 수단은 도착 노드가 걸린
+#: 정류장의 수단이다(역에서 보행망으로 나오는 ACCESS 는 WALK). V11 마이그레이션과 같은 쿼리다.
+COUNT_SQL = """
+    SELECT 'NODE' AS what, n.kind, coalesce(s.mode, 'WALK') AS mode, count(*)
+    FROM graph_node n LEFT JOIN transit_stop s ON s.id = n.stop_id
+    WHERE n.build_id = %(id)s
+    GROUP BY n.kind, s.mode
+    UNION ALL
+    SELECT 'EDGE', e.kind, coalesce(s.mode, 'WALK'), count(*)
+    FROM graph_edge e
+    JOIN graph_node t ON t.id = e.to_node_id
+    LEFT JOIN transit_stop s ON s.id = t.stop_id
+    WHERE e.build_id = %(id)s
+    GROUP BY e.kind, s.mode
+"""
+
+#: 들어오는 엣지도 나가는 엣지도 없는 노드. 0 이 아니면 스냅이나 적재가 어딘가 끊긴 것이다.
+ISOLATED_SQL = """
+    SELECT count(*) FROM graph_node n
+    WHERE n.build_id = %(id)s
+      AND NOT EXISTS (SELECT 1 FROM graph_edge e WHERE e.from_node_id = n.id)
+      AND NOT EXISTS (SELECT 1 FROM graph_edge e WHERE e.to_node_id = n.id)
+"""
+
+
+def summarize_counts(rows) -> dict:
+    """`(what, kind, mode, count)` 행 → graph_build 합계 칸. 수단을 가리지 않고 더한다."""
+    total = {}
+    for what, kind, _mode, n in rows:
+        total[(what, kind)] = total.get((what, kind), 0) + int(n)
+    col = lambda what, kind: total.get((what, kind), 0)  # noqa: E731
+    return {
+        "nodes_walk": col("NODE", "WALK"),
+        "nodes_stop": col("NODE", "STOP"),
+        "nodes_platform": col("NODE", "PLATFORM"),
+        "edges_walk": col("EDGE", "WALK"),
+        "edges_access": col("EDGE", "ACCESS"),
+        "edges_board": col("EDGE", "BOARD"),
+        "edges_alight": col("EDGE", "ALIGHT"),
+        "edges_ride": col("EDGE", "RIDE"),
+        "edges_transfer": col("EDGE", "TRANSFER"),
+    }
+
+
+def finish_build(conn, build_id: int, fallback_ratio: float, duration_ms: int) -> dict:
+    """빌드를 끝낸다. 규모는 **그래프 테이블에서 직접 센다** — 적재 단계가 돌려준 숫자를
+    손으로 더하지 않는다. 그렇게 더하다 버스를 넣을 때 노드 쪽이 빠져 정류장 402 · 플랫폼 562
+    (지하철만)로 기록돼 있었다. 센 결과를 돌려준다.
+    """
     with conn.cursor() as cur:
+        cur.execute(COUNT_SQL, {"id": build_id})
+        rows = cur.fetchall()
+        cur.execute(ISOLATED_SQL, {"id": build_id})
+        isolated = cur.fetchone()[0]
+        totals = summarize_counts(rows)
+        counts = [
+            {"what": w, "kind": k, "mode": m, "count": int(n)}
+            for w, k, m, n in sorted(rows, key=lambda r: (r[0] != "NODE", r[1], r[2]))
+        ]
         cur.execute(
             """
             UPDATE graph_build SET
-                status = 'SUCCESS', finished_at = now(), duration_ms = %(dur)s,
-                nodes_walk = %(nw)s, nodes_stop = %(ns)s, nodes_platform = %(np)s,
-                edges_walk = %(ew)s, edges_access = %(ea)s, edges_board = %(eb)s,
-                edges_ride = %(er)s, edges_transfer = %(et)s,
+                status = 'SUCCESS',
+                -- now() 는 트랜잭션 시작 시각이라 빌드 맨 앞이 찍힌다. 지금 이 순간을 쓴다.
+                finished_at = clock_timestamp(), duration_ms = %(dur)s,
+                nodes_walk = %(nodes_walk)s, nodes_stop = %(nodes_stop)s,
+                nodes_platform = %(nodes_platform)s,
+                edges_walk = %(edges_walk)s, edges_access = %(edges_access)s,
+                edges_board = %(edges_board)s, edges_alight = %(edges_alight)s,
+                edges_ride = %(edges_ride)s, edges_transfer = %(edges_transfer)s,
+                counts = %(counts)s::jsonb,
                 isolated_nodes = %(iso)s, transfer_fallback_ratio = %(fb)s
             WHERE id = %(id)s
             """,
-            {"id": build_id, "dur": duration_ms, **stats},
+            {"id": build_id, "dur": duration_ms, "iso": isolated, "fb": fallback_ratio,
+             "counts": json.dumps(counts), **totals},
         )
         # 활성 전환은 마지막에. 부분 유니크 인덱스가 둘을 허용하지 않으므로 먼저 내린다.
         cur.execute("UPDATE graph_build SET is_active = FALSE WHERE is_active")
         cur.execute("UPDATE graph_build SET is_active = TRUE WHERE id = %s", (build_id,))
+    return {**totals, "isolated_nodes": isolated}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1061,13 +1126,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  ⚠ {SNAP_WARN_M:.0f}m 초과 {s['over_warn']}개 — "
                       f"보행망에 출입구가 안 잡힌 역이다", flush=True)
 
-            finish_build(conn, build_id, {
-                "nw": nw, "ns": len(stop_node), "np": len(platform),
-                "ew": ew, "ea": ea, "eb": eb, "er": er, "et": et,
-                "iso": 0,
-                "fb": round(fallback / et, 4) if et else 0.0,
-            }, int((time.monotonic() - t0) * 1000))
+            counted = finish_build(
+                conn, build_id,
+                round(fallback / et, 4) if et else 0.0,
+                int((time.monotonic() - t0) * 1000),
+            )
             conn.commit()
+            if counted["isolated_nodes"]:
+                print(f"  ⚠ 고립 노드 {counted['isolated_nodes']:,}개 — 엣지가 하나도 없다", flush=True)
 
         except Exception as e:  # noqa: BLE001 — 실패해도 회차는 남긴다
             conn.rollback()

@@ -15,6 +15,7 @@ from etl.build_graph import (
     representative,
     split_unpriced_routes,
     subway_service_hours,
+    summarize_counts,
 )
 
 
@@ -116,3 +117,31 @@ class TestHourlyLiteral:
     def test_representative_ignores_no_service(self):
         assert representative([NO_SERVICE] * 19 + [95, 175, 125, 112, 112]) == 112
         assert representative([NO_SERVICE] * 24) == NO_SERVICE
+
+
+class TestSummarizeCounts:
+    """graph_build 합계 칸은 수단을 가리지 않고 더한다. 예전에는 지하철만 세어
+    정류장 402 · 플랫폼 562 로 기록돼 있었다(버스 11,042 · 36,606 이 빠짐)."""
+
+    ROWS = [
+        ("NODE", "STOP", "SUBWAY", 402), ("NODE", "STOP", "BUS", 11_042),
+        ("NODE", "PLATFORM", "SUBWAY", 562), ("NODE", "PLATFORM", "BUS", 36_606),
+        ("NODE", "WALK", "WALK", 165_050),
+        ("EDGE", "ALIGHT", "SUBWAY", 562), ("EDGE", "ALIGHT", "BUS", 36_606),
+        ("EDGE", "ACCESS", "WALK", 11_308), ("EDGE", "ACCESS", "SUBWAY", 280),
+    ]
+
+    def test_adds_bus_to_subway(self):
+        t = summarize_counts(self.ROWS)
+        assert t["nodes_stop"] == 11_444
+        assert t["nodes_platform"] == 37_168
+
+    def test_alight_is_counted(self):
+        """하차 엣지는 칸조차 없었다."""
+        assert summarize_counts(self.ROWS)["edges_alight"] == 37_168
+
+    def test_access_counts_both_directions(self):
+        assert summarize_counts(self.ROWS)["edges_access"] == 11_588
+
+    def test_missing_kind_is_zero(self):
+        assert summarize_counts(self.ROWS)["edges_transfer"] == 0
