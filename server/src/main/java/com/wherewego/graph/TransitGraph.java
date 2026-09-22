@@ -40,6 +40,8 @@ public final class TransitGraph {
     private final byte[] nodeMode;   // TransitMode.code() 또는 NONE
     private final int[] nodeStop;    // stopNames 첨자, 없으면 -1
     private final int[] nodeRoute;   // routeNames 첨자, 없으면 -1
+    private final float[] nodeLng;   // WGS84. 경로를 지도에 그릴 때만 쓴다
+    private final float[] nodeLat;
 
     // ── 엣지 (CSR) ──────────────────────────────────────────────────────────
     private final int[] head;        // 길이 N+1
@@ -55,6 +57,7 @@ public final class TransitGraph {
     private final String[] stopNames;
     private final String[] routeIds;
     private final String[] routeNames;
+    private final String[] routeTypes;  // 버스 노선 유형(간선·지선…). 지하철은 null, 급행은 '급행'
     private final Map<String, Integer> stopIndex;  // "SUBWAY\u0000강남" → 노드 첨자
 
     TransitGraph(
@@ -64,6 +67,8 @@ public final class TransitGraph {
             byte[] nodeMode,
             int[] nodeStop,
             int[] nodeRoute,
+            float[] nodeLng,
+            float[] nodeLat,
             int[] head,
             int[] edgeTo,
             int[] edgeWeight,
@@ -75,6 +80,7 @@ public final class TransitGraph {
             String[] stopNames,
             String[] routeIds,
             String[] routeNames,
+            String[] routeTypes,
             Map<String, Integer> stopIndex) {
         this.buildId = buildId;
         this.nodeDbId = nodeDbId;
@@ -82,6 +88,8 @@ public final class TransitGraph {
         this.nodeMode = nodeMode;
         this.nodeStop = nodeStop;
         this.nodeRoute = nodeRoute;
+        this.nodeLng = nodeLng;
+        this.nodeLat = nodeLat;
         this.head = head;
         this.edgeTo = edgeTo;
         this.edgeWeight = edgeWeight;
@@ -93,6 +101,7 @@ public final class TransitGraph {
         this.stopNames = stopNames;
         this.routeIds = routeIds;
         this.routeNames = routeNames;
+        this.routeTypes = routeTypes;
         this.stopIndex = stopIndex;
     }
 
@@ -161,6 +170,26 @@ public final class TransitGraph {
     }
 
     /** 표시용 노선 이름. 이름표가 없으면 식별자로 떨어진다. */
+    /**
+     * 노드의 경도·위도(WGS84). 경로를 지도에 그리는 데만 쓴다 — 탐색은 좌표를 보지 않는다.
+     *
+     * <p>{@code float} 로 둔다. 7자리 유효숫자면 서울에서 1m 안팎이라 선을 그리기에 충분하고,
+     * 노드 21만 개에 1.7MB 로 {@code double} 의 절반이다.
+     */
+    public double lngOf(int node) {
+        return nodeLng[node];
+    }
+
+    public double latOf(int node) {
+        return nodeLat[node];
+    }
+
+    /** 버스 노선 유형(간선·지선·광역·마을·순환…). 색을 고르는 데 쓴다. 지하철이면 null. */
+    public String routeTypeOf(int edge) {
+        int r = edgeRoute[edge];
+        return r < 0 || routeTypes == null ? null : routeTypes[r];
+    }
+
     public String routeNameOf(int edge) {
         int r = edgeRoute[edge];
         return r < 0 ? null : routeNames[r];
@@ -217,6 +246,7 @@ public final class TransitGraph {
                 + 4L * (edgeTo.length + edgeWeight.length + edgeRoute.length)
                 + 4L * (edgeDistCm.length + edgeHourly.length)
                 + edgeKind.length
-                + 2L * hourly.length;
+                + 2L * hourly.length
+                + 8L * nodeLng.length;
     }
 }

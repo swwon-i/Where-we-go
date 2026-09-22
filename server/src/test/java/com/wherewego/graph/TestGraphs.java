@@ -34,6 +34,9 @@ public final class TestGraphs {
         private final List<Edge> edges = new ArrayList<>();
         private final List<String> routeIds = new ArrayList<>();
         private final List<String> routeNames = new ArrayList<>();
+        private final List<String> routeTypes = new ArrayList<>();
+        /** 따로 주지 않으면 경도 = 노드 번호, 위도 = 0. 좌표열이 어느 노드를 지났는지 바로 읽힌다. */
+        private final HashMap<Long, double[]> coords = new HashMap<>();
         private final HashMap<String, Integer> routeIndex = new HashMap<>();
 
         /** 보행 노드. */
@@ -56,9 +59,20 @@ public final class TestGraphs {
 
         /** 노선 이름표. 등록하지 않으면 식별자가 그대로 표시된다. */
         public Builder route(TransitMode mode, String id, String name) {
+            return route(mode, id, name, null);
+        }
+
+        public Builder route(TransitMode mode, String id, String name, String type) {
             routeIndex.put(mode.name() + '\u0000' + id, routeIds.size());
             routeIds.add(id);
             routeNames.add(name);
+            routeTypes.add(type);
+            return this;
+        }
+
+        /** 노드 좌표를 정한다. */
+        public Builder at(long id, double lng, double lat) {
+            coords.put(id, new double[] {lng, lat});
             return this;
         }
 
@@ -92,6 +106,8 @@ public final class TestGraphs {
             var mode = new byte[n];
             var stop = new int[n];
             var route = new int[n];
+            var lng = new float[n];
+            var lat = new float[n];
             var stopNames = new ArrayList<String>();
             var nameIndex = new HashMap<String, Integer>();
             var stopIndex = new HashMap<String, Integer>();
@@ -99,6 +115,9 @@ public final class TestGraphs {
             for (int i = 0; i < n; i++) {
                 var node = sorted.get(i);
                 dbId[i] = node.id();
+                var c = coords.getOrDefault(node.id(), new double[] {node.id(), 0});
+                lng[i] = (float) c[0];
+                lat[i] = (float) c[1];
                 kind[i] = node.kind().code();
                 mode[i] = node.mode();
                 stop[i] = node.stopName() == null
@@ -149,12 +168,13 @@ public final class TestGraphs {
 
             return new TransitGraph(
                     0,
-                    dbId, kind, mode, stop, route,
+                    dbId, kind, mode, stop, route, lng, lat,
                     csr.head(), csr.to(), csr.weight(), csr.kind(), csr.route(),
                     csr.distCm(), csr.hourlyAt(), hourly,
                     stopNames.toArray(String[]::new),
                     routeIds.toArray(String[]::new),
                     routeNames.toArray(String[]::new),
+                    routeTypes.toArray(String[]::new),
                     stopIndex);
         }
 
@@ -167,6 +187,7 @@ public final class TestGraphs {
             routeIndex.put(key, routeIds.size());
             routeIds.add(line);
             routeNames.add(null);
+            routeTypes.add(null);
             return routeIds.size() - 1;
         }
 

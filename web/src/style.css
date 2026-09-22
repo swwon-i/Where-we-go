@@ -313,3 +313,45 @@ div:has(> .place-card) { pointer-events: none; }
 .place-card .card-foot button.primary { border-color: #2563eb; color: #2563eb; font-weight: 600; }
 .place-card .card-foot button.primary:hover:not(:disabled) { background: #2563eb; color: #fff; }
 .place-card .card-foot button[data-act="remove"]:hover:not(:disabled) { border-color: #e11d48; color: #e11d48; }
+
+
+/* ── 경로 타임라인 (행렬 칸 상세) ──────────────────────────────────────── */
+.timeline { padding: 12px 14px 14px; }
+.tl-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+.tl-total { font-size: 18px; }
+.tl-hour { margin-left: auto; }
+/* 구간을 시간 비율로 늘어놓은 막대. 기다리는 시간이 얼마나 되는지 한눈에 보인다 */
+.tl-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; gap: 2px; margin-bottom: 12px; }
+.tl-bar span { min-width: 3px; }
+.tl-bar span.walk { opacity: .55; }
+.tl-bar span.wait { opacity: .35; }
+.timeline ol { list-style: none; margin: 0; padding: 0; }
+.tl-leg { display: flex; gap: 12px; cursor: pointer; border-radius: 6px; padding: 0 6px 0 4px; }
+.tl-leg:hover { background: var(--panel); }
+.tl-rail { position: relative; width: 14px; flex: none; }
+.tl-rail::before {  /* 세로 막대 */
+  content: ''; position: absolute; left: 5px; top: 0; bottom: 0; width: 4px; background: var(--c); border-radius: 2px;
+}
+.tl-leg.walk .tl-rail::before {
+  background: repeating-linear-gradient(to bottom, var(--c) 0 5px, transparent 5px 9px);
+}
+.tl-leg.board .tl-rail::before, .tl-leg.transfer .tl-rail::before { background: transparent; }
+.tl-leg.board .tl-rail::after, .tl-leg.transfer .tl-rail::after {  /* 승차·환승 자리의 점 */
+  content: ''; position: absolute; left: 0; top: 50%; width: 14px; height: 14px; margin-top: -7px;
+  border-radius: 50%; background: var(--bg); border: 3px solid var(--c); box-sizing: border-box;
+}
+.tl-body { flex: 1; padding: 7px 0; min-width: 0; }
+.tl-line { display: flex; align-items: baseline; gap: 8px; }
+.tl-kind { font-size: 11px; color: var(--muted); min-width: 30px; }
+.tl-name { color: var(--c); }
+.tl-leg.walk .tl-name { color: var(--fg); }
+.tl-time { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
+.tl-sub { margin-top: 1px; }
+.tl-leg.board, .tl-leg.transfer { color: var(--muted); }
+.tl-leg.board .tl-time, .tl-leg.transfer .tl-time { font-weight: 400; }
+
+
+/* 경로 위의 점 — 픽셀 크기라 축척과 상관없이 보인다 */
+.route-dot { width: 14px; height: 14px; border-radius: 50%; box-sizing: border-box; pointer-events: none; }
+.route-dot.stop { background: #fff; border: 3px solid var(--c); box-shadow: 0 0 0 2px rgba(255, 255, 255, .8); }
+.route-dot.end { width: 16px; height: 16px; background: var(--c); border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .35); }

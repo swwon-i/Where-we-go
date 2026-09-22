@@ -17,6 +17,7 @@
 
 import { api, ApiError } from '../api.js';
 import { $, $$, esc, notice, busy } from '../dom.js';
+import { legColor } from '../lines.js';
 
 /**
  * 출발 시각대는 0~23시 전부 고를 수 있다. 예전에는 8·12·15·19·21·23시만 골랐는데 근거가 없었고,
@@ -35,8 +36,11 @@ export function resetMatrix() {
 /**
  * @param {HTMLElement} container 표를 그릴 자리
  * @param {string} roomId
+ * @param {{ onRoute?: (legs: object[]|null) => void, onLeg?: (leg: object) => void }} [map]
+ *   방 지도와 잇는 자리. 칸을 펼치면 경로를 그리고(`onRoute(legs)`), 접으면 지운다(`onRoute(null)`).
+ *   타임라인 줄을 누르면 그 구간으로 옮긴다(`onLeg`).
  */
-export function matrixPanel(container, roomId) {
+export function matrixPanel(container, roomId, map = {}) {
   let hour = DEFAULT_HOUR;
   let data = null;
 
@@ -106,6 +110,7 @@ export function matrixPanel(container, roomId) {
       openCell = null;
       existing?.remove();
       $$('.cell.is-open', container).forEach((c) => c.classList.remove('is-open'));
+      map.onRoute?.(null);
       return;
     }
 
@@ -128,8 +133,16 @@ export function matrixPanel(container, roomId) {
         bookmarkId: cell.dataset.row,
         departureHour: hour,
       });
+      if (openCell !== key) return;  // 그 사이 다른 칸을 눌렀다
+      const colored = route.reachable
+        ? route.legs.map((l) => ({ ...l, color: legColor(l) }))
+        : [];
       detail.innerHTML =
-        `<td colspan="${data.origins.length + 1}">${legs(route)}</td>`;
+        `<td colspan="${data.origins.length + 1}">${timeline(route, colored, hour)}</td>`;
+      map.onRoute?.(colored.length ? colored : null);
+      $$('.tl-leg', detail).forEach((li) => {
+        li.onclick = () => map.onLeg?.(colored[Number(li.dataset.i)]);
+      });
     } catch {
       detail.innerHTML =
         `<td colspan="${data.origins.length + 1}">${notice('경로를 불러오지 못했습니다.', 'bad')}</td>`;
@@ -221,25 +234,45 @@ function minutes(seconds) {
 }
 
 /**
- * 경로 구간. 기다리는 일(승차·환승)은 탈것 줄과 따로 보인다 — 탈것 줄은 주행만 담는다.
- * 예전에는 "6호선 2정차 10분"처럼 환승 4분이 노선 줄 안에 숨어 있었다.
+ * 경로 상세 — 세로 타임라인.
+ *
+ * 왼쪽 막대의 색이 **지도에 그린 선의 색과 같다**(lines.js). 도보는 점선, 승차·환승은 그 자리의
+ * 점이고 흐리게 둔다 — "타고 가는 시간"과 "기다리는 시간"을 눈으로 가를 수 있어야 한다.
+ * 줄을 누르면 지도가 그 구간으로 간다.
  */
-function legs(route) {
+function timeline(route, legs, hour) {
   if (!route.reachable) return notice('이 경로는 닿지 않습니다.', 'bad');
+  const total = route.totalSeconds;
   return `
-    <div class="legs">
-      <div class="legs-head">${esc(route.summary)}</div>
+    <div class="timeline">
+      <div class="tl-head">
+        <b class="tl-total">${minutes(total)}</b>
+        <span class="meta">환승 ${route.transfers} · 도보 ${Math.round(route.walkDistanceM)}m</span>
+        <span class="tl-hour meta">${hour}시 출발</span>
+      </div>
+      <div class="tl-bar" aria-hidden="true">
+        ${legs.map((l) => `<span style="flex:${Math.max(l.seconds, 1)};background:${l.color}"
+            class="${l.kind === 'WALK' ? 'walk' : ''} ${WAITS[l.kind] ? 'wait' : ''}"></span>`).join('')}
+      </div>
       <ol>
-        ${route.legs.map((l) => `
-          <li class="${WAITS[l.kind] ? 'wait' : ''}">
-            <span class="kind ${l.kind.toLowerCase()}">${label(l.kind)}</span>
-            <b>${esc(l.label ?? '')}</b>
-            ${l.stops ? `<span class="meta">${l.stops}정차</span>` : ''}
-            ${l.kind === 'WALK' ? `<span class="meta">${Math.round(l.distanceM)}m</span>` : ''}
-            <span class="meta">${minutes(l.seconds)}</span>
-            ${WAITS[l.kind]
-              ? `<span class="meta">· ${esc(l.toName ?? '')} · ${WAITS[l.kind]}</span>`
-              : (l.toName ? `<span class="meta">→ ${esc(l.toName)}</span>` : '')}
+        ${legs.map((l, i) => `
+          <li class="tl-leg ${l.kind.toLowerCase()}" data-i="${i}" style="--c:${l.color}"
+              title="누르면 지도가 이 구간으로 갑니다">
+            <span class="tl-rail"></span>
+            <div class="tl-body">
+              <div class="tl-line">
+                <span class="tl-kind">${label(l.kind)}</span>
+                ${l.label ? `<b class="tl-name">${esc(l.label)}</b>` : ''}
+                ${l.stops ? `<span class="meta">${l.stops}정차</span>` : ''}
+                ${l.kind === 'WALK' ? `<span class="meta">${Math.round(l.distanceM)}m</span>` : ''}
+                <span class="tl-time">${minutes(l.seconds)}</span>
+              </div>
+              <div class="tl-sub meta">
+                ${WAITS[l.kind]
+                  ? `${esc(l.toName ?? '')} · ${WAITS[l.kind]}`
+                  : (l.toName ? `→ ${esc(l.toName)}` : (i === legs.length - 1 ? '→ 도착' : ''))}
+              </div>
+            </div>
           </li>`).join('')}
       </ol>
     </div>`;

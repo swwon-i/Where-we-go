@@ -98,10 +98,19 @@ public class GraphLoader {
             return ids.size() - 1;
         }
 
-        void put(String mode, String routeId, String name) {
+        private final List<String> types = new ArrayList<>();
+
+        void put(String mode, String routeId, String name, String type) {
             index.put(mode + '\u0000' + routeId, ids.size());
             ids.add(routeId);
             names.add(name);
+            types.add(type);
+        }
+
+        String[] types() {
+            // intern() 이 이름 없이 붙인 노선만큼 뒤에 비어 있다. 길이를 ids 에 맞춘다.
+            while (types.size() < ids.size()) types.add(null);
+            return types.toArray(String[]::new);
         }
 
         String[] ids() {
@@ -116,10 +125,11 @@ public class GraphLoader {
     private Routes loadRoutes() {
         var routes = new Routes();
         jdbc.query(
-                "SELECT mode, source_id, name FROM transit_route",
+                "SELECT mode, source_id, name, route_type FROM transit_route",
                 rs -> {
                     routes.put(
-                            rs.getString("mode"), rs.getString("source_id"), rs.getString("name"));
+                            rs.getString("mode"), rs.getString("source_id"), rs.getString("name"),
+                            rs.getString("route_type"));
                 });
         return routes;
     }
@@ -132,6 +142,8 @@ public class GraphLoader {
             byte[] mode,
             int[] stop,
             int[] route,
+            float[] lng,
+            float[] lat,
             String[] stopNames,
             Map<String, Integer> stopIndex) {}
 
@@ -143,6 +155,8 @@ public class GraphLoader {
         var mode = new byte[n];
         var stop = new int[n];
         var route = new int[n];
+        var lng = new float[n];
+        var lat = new float[n];
 
         var nameIndex = new HashMap<String, Integer>();
         var nameList = new ArrayList<String>();
@@ -152,7 +166,9 @@ public class GraphLoader {
         var counter = new int[1];
         jdbc.query(
                 """
-                SELECT n.id, n.kind, n.line, s.mode, s.name
+                SELECT n.id, n.kind, n.line, s.mode, s.name,
+                       ST_X(ST_Transform(n.geom, 4326)) AS lng,
+                       ST_Y(ST_Transform(n.geom, 4326)) AS lat
                 FROM graph_node n
                 LEFT JOIN transit_stop s ON s.id = n.stop_id
                 WHERE n.build_id = ?
@@ -163,6 +179,8 @@ public class GraphLoader {
                     dbId[i] = rs.getLong("id");
                     kind[i] = NodeKind.valueOf(rs.getString("kind")).code();
                     mode[i] = TransitMode.codeOf(rs.getString("mode"));
+                    lng[i] = (float) rs.getDouble("lng");
+                    lat[i] = (float) rs.getDouble("lat");
 
                     String name = rs.getString("name");
                     stop[i] = name == null
@@ -184,7 +202,7 @@ public class GraphLoader {
                     "노드 수가 세는 사이에 바뀌었다: " + n + " → " + counter[0]);
         }
         return new Nodes(
-                dbId, kind, mode, stop, route, nameList.toArray(String[]::new), stopIndex);
+                dbId, kind, mode, stop, route, lng, lat, nameList.toArray(String[]::new), stopIndex);
     }
 
     // ── 엣지 ────────────────────────────────────────────────────────────────
@@ -259,6 +277,8 @@ public class GraphLoader {
                 nodes.mode(),
                 nodes.stop(),
                 nodes.route(),
+                nodes.lng(),
+                nodes.lat(),
                 csr.head(),
                 csr.to(),
                 csr.weight(),
@@ -270,6 +290,7 @@ public class GraphLoader {
                 nodes.stopNames(),
                 routes.ids(),
                 routes.names(),
+                routes.types(),
                 nodes.stopIndex());
     }
 

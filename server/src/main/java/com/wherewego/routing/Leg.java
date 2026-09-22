@@ -2,6 +2,7 @@ package com.wherewego.routing;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.List;
 
 /**
  * 경로를 사람이 읽는 단위로 묶은 것. 같은 노선을 연속으로 타면 한 구간이다.
@@ -23,6 +24,10 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param stops 정차 수. 탈것만 의미가 있다
  * @param distanceM 도보 거리(m). 걷는 구간만 채워진다
  * @param toName 이 구간이 끝나는 곳의 이름
+ * @param routeType 버스 노선 유형(간선·지선·광역·마을·순환…). 지도의 선 색을 고른다. 지하철·도보는 null
+ * @param path 지도에 그릴 좌표열 {@code [[경도, 위도], …]}(WGS84). 도보는 보행망 교차점을 따라가 실제
+ *     길 모양에 가깝고, 지하철·버스는 지나는 역·정류장을 잇는 직선이다 — 선로·도로 모양은 데이터에
+ *     없다. 승차·환승은 그 자리 점 하나다. 앞 구간의 끝점과 다음 구간의 첫 점은 같은 곳이다
  */
 public record Leg(
         String kind,
@@ -31,7 +36,15 @@ public record Leg(
         int seconds,
         int stops,
         double distanceM,
-        String toName) {
+        String toName,
+        String routeType,
+        List<double[]> path) {
+
+    /** 좌표 없이 만든다. 시간·노선만 보는 테스트와 조립 도중에 쓴다. */
+    public Leg(String kind, String line, String lineName, int seconds, int stops, double distanceM,
+            String toName) {
+        this(kind, line, lineName, seconds, stops, distanceM, toName, null, List.of());
+    }
 
     public static final String WALK = "WALK";
     public static final String SUBWAY = "SUBWAY";
@@ -61,7 +74,7 @@ public record Leg(
     Leg plusSeconds(int extra, String newToName) {
         return new Leg(
                 kind, line, lineName, seconds + extra, stops, distanceM,
-                newToName != null ? newToName : toName);
+                newToName != null ? newToName : toName, routeType, path);
     }
 
     Leg merge(Leg next) {
@@ -72,6 +85,19 @@ public record Leg(
                 seconds + next.seconds,
                 stops + next.stops,
                 distanceM + next.distanceM,
-                next.toName != null ? next.toName : toName);
+                next.toName != null ? next.toName : toName,
+                routeType != null ? routeType : next.routeType,
+                joinPaths(path, next.path));
+    }
+
+    /** 두 좌표열을 잇는다. 앞의 끝점과 뒤의 첫 점이 같으면 한 번만 넣는다. */
+    static List<double[]> joinPaths(List<double[]> a, List<double[]> b) {
+        if (a.isEmpty()) return b;
+        if (b.isEmpty()) return a;
+        var out = new java.util.ArrayList<double[]>(a.size() + b.size());
+        out.addAll(a);
+        int from = java.util.Arrays.equals(a.getLast(), b.getFirst()) ? 1 : 0;
+        out.addAll(b.subList(from, b.size()));
+        return List.copyOf(out);
     }
 }

@@ -37,6 +37,7 @@ const placeCache = new Map();
 
 /** 화면을 떠날 때 폴링을 멈춘다. 안 멈추면 방을 나가도 요청이 계속 나간다. */
 export function leaveRoom() {
+  mapView?.clearRoute();
   clearInterval(poller);
   poller = null;
   mapView?.destroy();
@@ -176,7 +177,24 @@ function paintShell() {
       // 표를 340px 에 우겨넣으면 읽을 수 없다. 행렬 탭에서만 패널을 넓힌다.
       $('.side').classList.toggle('wide', tab.dataset.panel === 'matrix');
       if (tab.dataset.panel === 'matrix' && !matrix) {
-        matrix = matrixPanel($('#panel-matrix'), roomId);
+        matrix = matrixPanel($('#panel-matrix'), roomId, {
+          onRoute: (legs) => {
+            if (!mapView) return;
+            if (!legs) {
+              mapView.clearRoute();
+              return;
+            }
+            mapView.closeCard();
+            openKey = null;
+            mapView.drawRoute(legs);
+            mapView.fit(legs.flatMap((l) => l.path ?? []).map(([lng, lat]) => ({ lng, lat })));
+          },
+          onLeg: (leg) => {
+            const pts = (leg?.path ?? []).map(([lng, lat]) => ({ lng, lat }));
+            if (pts.length === 1) mapView?.panTo(pts[0]);
+            else if (pts.length) mapView?.fit(pts);
+          },
+        });
       }
     };
   });

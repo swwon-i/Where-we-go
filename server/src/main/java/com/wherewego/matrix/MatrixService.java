@@ -180,10 +180,15 @@ public class MatrixService {
             String summary,
             List<Leg> legs) {
 
-        /** @param label 화면에 쓸 노선 이름. 이름표가 없으면 식별자로 떨어진다 */
+        /**
+         * @param label 화면에 쓸 노선 이름. 이름표가 없으면 식별자로 떨어진다
+         * @param routeType 버스 노선 유형. 지도 선 색을 고른다
+         * @param path 지도에 그릴 좌표열 {@code [[경도, 위도], …]}. {@link com.wherewego.routing.Leg#path} 참조
+         */
         public record Leg(
                 String kind, String line, String label,
-                int seconds, int stops, double distanceM, String toName) {}
+                int seconds, int stops, double distanceM, String toName,
+                String routeType, List<double[]> path) {}
     }
 
     /**
@@ -238,7 +243,8 @@ public class MatrixService {
                 route.legs().stream()
                         .map(l -> new RouteDetail.Leg(
                                 l.kind(), l.line(), l.label(),
-                                l.seconds(), l.stops(), l.distanceM(), l.toName()))
+                                l.seconds(), l.stops(), l.distanceM(), l.toName(),
+                                l.routeType(), l.path()))
                         .toList());
     }
 

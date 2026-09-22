@@ -37,7 +37,7 @@ class LegJsonTest {
         assertThat(json.propertyNames())
                 .containsExactlyInAnyOrder(
                         "kind", "line", "lineName", "seconds", "stops", "distanceM",
-                        "toName", "label");
+                        "toName", "routeType", "path", "label");
     }
 
     @Test

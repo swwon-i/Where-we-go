@@ -156,6 +156,45 @@ class RouteBuilderTest {
         }
 
         @Test
+        @DisplayName("구간마다 지도에 그릴 좌표열이 붙는다 — 도보는 교차점을, 탈것은 정거장을 잇는다")
+        void legsCarryPaths() {
+            var g = TestGraphs.builder()
+                    .route(TransitMode.SUBWAY, "5", "5호선")
+                    .walk(1).walk(2)
+                    .stop(10, TransitMode.SUBWAY, "화곡")
+                    .platform(11, TransitMode.SUBWAY, "5", "화곡")
+                    .platform(12, TransitMode.SUBWAY, "5", "까치산")
+                    .platform(13, TransitMode.SUBWAY, "5", "신정")
+                    .walkEdge(1, 2, 30, 36)
+                    .walkEdge(2, 10, 30, 36)
+                    .edge(10, 11, 200, EdgeKind.BOARD, "5")
+                    .edge(11, 12, 120, EdgeKind.RIDE, "5")
+                    .edge(12, 13, 120, EdgeKind.RIDE, "5")
+                    .build();
+            var legs = route(g, 1, 13).legs();
+
+            // 좌표는 따로 주지 않으면 (노드 번호, 0) 이다
+            assertThat(lngs(legs.get(0))).containsExactly(1.0, 2.0, 10.0);   // 도보: 이은 곳이 한 번씩만
+            assertThat(lngs(legs.get(1))).containsExactly(11.0);             // 승차: 점 하나
+            assertThat(lngs(legs.get(2))).containsExactly(11.0, 12.0, 13.0); // 5호선: 정거장마다
+        }
+
+        @Test
+        @DisplayName("버스 구간은 노선 유형을 싣는다 — 지도가 간선·지선 색을 고른다")
+        void busLegCarriesRouteType() {
+            var g = TestGraphs.builder()
+                    .route(TransitMode.BUS, "100100017", "120", "간선")
+                    .stop(30, TransitMode.BUS, "역삼역")
+                    .platform(31, TransitMode.BUS, "100100017", "역삼역")
+                    .platform(32, TransitMode.BUS, "100100017", "수유역")
+                    .edge(30, 31, 200, EdgeKind.BOARD, "100100017")
+                    .edge(31, 32, 180, EdgeKind.RIDE, "100100017")
+                    .build();
+            var ride = route(g, 30, 32).legs().stream().filter(Leg::isRide).findFirst().orElseThrow();
+            assertThat(ride.routeType()).isEqualTo("간선");
+        }
+
+        @Test
         @DisplayName("대합실로 나갔다 다시 타도 환승으로 보인다 — 공덕 5→6호선은 이쪽이 1초 쌌다")
         void reboardingViaConcourseIsATransfer() {
             var g = TestGraphs.builder()
@@ -231,5 +270,9 @@ class RouteBuilderTest {
     void unreachableIsNull() {
         var g = TestGraphs.builder().walk(1).walk(2).walk(9).walkEdge(1, 2, 10, 12).build();
         assertThat(route(g, 1, 9)).isNull();
+    }
+
+    private static java.util.List<Double> lngs(Leg leg) {
+        return leg.path().stream().map(p -> p[0]).toList();
     }
 }

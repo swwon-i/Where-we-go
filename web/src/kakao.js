@@ -63,6 +63,8 @@ export function createMap(container, { lat, lng }, level = 5) {
 
   let markers = [];
   let infoWindow = null;
+  /** 그려 둔 경로(선·점). 마커와 따로 둔다 — 5초마다 마커를 다시 그려도 경로는 남아야 한다. */
+  let routeShapes = [];
   /** 떠 있는 정보 카드. 한 번에 하나만. */
   let card = null;
 
@@ -156,6 +158,57 @@ export function createMap(container, { lat, lng }, level = 5) {
     },
 
     closeCard,
+
+    /**
+     * 경로를 그린다. 구간마다 색이 다른 선, 도보는 점선, 승차·환승 자리에는 흰 테두리 점.
+     *
+     * @param {{kind:string, path:number[][], color:string}[]} legs
+     */
+    drawRoute(legs) {
+      this.clearRoute();
+      const toLatLng = ([x, y]) => new kakao.maps.LatLng(y, x);
+      // 점은 픽셀 크기로 그린다. Circle 은 반지름이 미터라 축척을 바꾸면 사라지거나 커진다 —
+      // 1km 축척에서 반지름 18m 는 한 픽셀도 안 됐다.
+      const dot = (p, className, color, title) => {
+        const el = document.createElement('div');
+        el.className = `route-dot ${className}`;
+        el.style.setProperty('--c', color);
+        if (title) el.title = title;
+        routeShapes.push(new kakao.maps.CustomOverlay({
+          map, position: toLatLng(p), content: el, xAnchor: 0.5, yAnchor: 0.5, zIndex: 5,
+        }));
+      };
+      for (const leg of legs) {
+        if (!leg.path?.length) continue;
+        if (leg.kind === 'BOARD' || leg.kind === 'TRANSFER') {
+          dot(leg.path[0], 'stop', leg.color, `${leg.toName ?? ''} ${leg.label ?? ''}`.trim());
+          continue;
+        }
+        const walk = leg.kind === 'WALK';
+        // 흰 테두리를 먼저 깔아 지도 위에서 선이 묻히지 않게 한다
+        if (!walk) {
+          routeShapes.push(new kakao.maps.Polyline({
+            map, path: leg.path.map(toLatLng), strokeWeight: 9,
+            strokeColor: '#ffffff', strokeOpacity: 0.9, zIndex: 3,
+          }));
+        }
+        routeShapes.push(new kakao.maps.Polyline({
+          map, path: leg.path.map(toLatLng),
+          strokeWeight: walk ? 4 : 6, strokeColor: leg.color, strokeOpacity: walk ? 0.9 : 1,
+          strokeStyle: walk ? 'shortdash' : 'solid', zIndex: 4,
+        }));
+      }
+      // 출발·도착
+      const first = legs.find((l) => l.path?.length)?.path[0];
+      const last = [...legs].reverse().find((l) => l.path?.length)?.path.at(-1);
+      if (first) dot(first, 'end start', '#2563eb', '출발');
+      if (last) dot(last, 'end goal', '#e11d48', '도착');
+    },
+
+    clearRoute() {
+      routeShapes.forEach((s) => s.setMap(null));
+      routeShapes = [];
+    },
 
     onClick(handler) {
       kakao.maps.event.addListener(map, 'click', (e) => {

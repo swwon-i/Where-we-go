@@ -50,14 +50,16 @@ public final class RouteBuilder {
             var kind = graph.edgeKind(edge);
             // 가중치를 다시 계산하지 않고 확정 거리의 차이로 구한다 — 탐색이 실제로 더한 값과
             // 표시하는 값이 어긋나면 구간 합이 총합과 맞지 않는다(시간대 가중치에서 특히).
-            int seconds = result.dist()[node] - result.dist()[i == 0 ? source : nodes.get(i - 1)];
+            int prev = i == 0 ? source : nodes.get(i - 1);
+            int seconds = result.dist()[node] - result.dist()[prev];
             String name = graph.stopNameOf(node);
 
             if (kind.isWalking()) {
-                appendWalk(legs, seconds + alighting, graph.distanceM(edge), name);
+                appendWalk(legs, seconds + alighting, graph.distanceM(edge), name,
+                        point(graph, prev), point(graph, node));
                 alighting = 0;
             } else if (kind == EdgeKind.RIDE) {
-                appendRide(graph, legs, edge, seconds, name);
+                appendRide(graph, legs, edge, seconds, name, point(graph, prev), point(graph, node));
             } else if (kind.isBoarding()) {
                 // 이름표는 타려는 노선이다. "승차 · 5호선 · 화곡", "환승 · 6호선 · 공덕".
                 //
@@ -73,7 +75,10 @@ public final class RouteBuilder {
                         seconds + alighting,
                         0,
                         0.0,
-                        name));
+                        name,
+                        graph.routeTypeOf(edge),
+                        // 승차·환승은 그 자리 점 하나. 지도에 환승 지점 표시를 찍는 데 쓴다
+                        List.of(point(graph, node))));
                 alighting = 0;
             } else {
                 // ALIGHT — 이어지는 줄(역을 나가는 도보, 또는 다음 승차)에 붙인다
@@ -88,21 +93,25 @@ public final class RouteBuilder {
         return new Route(result.dist()[destination], mergeAdjacent(legs));
     }
 
-    private static void appendWalk(List<Leg> legs, int seconds, double distanceM, String name) {
+    private static void appendWalk(
+            List<Leg> legs, int seconds, double distanceM, String name, double[] from, double[] to) {
         if (!legs.isEmpty() && legs.getLast().isWalk()) {
             var last = legs.removeLast();
             legs.add(new Leg(
                     Leg.WALK, null, null,
                     last.seconds() + seconds, 0,
                     last.distanceM() + distanceM,
-                    name != null ? name : last.toName()));
+                    name != null ? name : last.toName(),
+                    null,
+                    Leg.joinPaths(last.path(), List.of(from, to))));
         } else {
-            legs.add(new Leg(Leg.WALK, null, null, seconds, 0, distanceM, name));
+            legs.add(new Leg(Leg.WALK, null, null, seconds, 0, distanceM, name, null, List.of(from, to)));
         }
     }
 
     private static void appendRide(
-            TransitGraph graph, List<Leg> legs, int edge, int seconds, String name) {
+            TransitGraph graph, List<Leg> legs, int edge, int seconds, String name,
+            double[] from, double[] to) {
         String kind = rideKind(graph, edge);
         String line = graph.routeIdOf(edge);
         if (!legs.isEmpty()
@@ -111,10 +120,25 @@ public final class RouteBuilder {
             var last = legs.removeLast();
             legs.add(new Leg(
                     kind, line, last.lineName(),
-                    last.seconds() + seconds, last.stops() + 1, 0.0, name));
+                    last.seconds() + seconds, last.stops() + 1, 0.0, name,
+                    last.routeType(),
+                    Leg.joinPaths(last.path(), List.of(from, to))));
         } else {
-            legs.add(new Leg(kind, line, graph.routeNameOf(edge), seconds, 1, 0.0, name));
+            legs.add(new Leg(kind, line, graph.routeNameOf(edge), seconds, 1, 0.0, name,
+                    graph.routeTypeOf(edge), List.of(from, to)));
         }
+    }
+
+    /**
+     * 노드 좌표 {@code [경도, 위도]}. 소수 6자리(서울에서 10cm 안팎)로 자른다 — 도보 구간은 점이
+     * 수백 개라 자릿수가 응답 크기를 좌우한다.
+     */
+    private static double[] point(TransitGraph graph, int node) {
+        return new double[] {round6(graph.lngOf(node)), round6(graph.latOf(node))};
+    }
+
+    private static double round6(double v) {
+        return Math.round(v * 1e6) / 1e6;
     }
 
     /** 탈것 구간의 이름표. 지하철인지 버스인지는 도착 노드의 수단으로 정한다. */
