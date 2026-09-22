@@ -53,6 +53,8 @@ services:
       WWG_DB_PASSWORD: wherewego
       # 카카오맵 JavaScript 키. 없으면 지도 자리에 발급 안내가 뜬다.
       WWG_KAKAO_JS_KEY: ${WWG_KAKAO_JS_KEY:-}
+      # 관리자 로그인 아이디(쉼표 구분). 저장소 루트 .env 에 둔다. 없으면 /admin 을 아무도 못 연다.
+      WWG_ADMIN_LOGIN_IDS: ${WWG_ADMIN_LOGIN_IDS:-}
     ports:
       - "8080:8080"
     restart: unless-stopped

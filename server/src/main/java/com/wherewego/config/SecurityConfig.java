@@ -1,6 +1,7 @@
 package com.wherewego.config;
 
 import com.wherewego.account.AccountService;
+import com.wherewego.account.AdminPolicy;
 import java.io.IOException;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -8,6 +9,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -82,7 +84,7 @@ public class SecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain filterChain(HttpSecurity http, AdminPolicy adminPolicy) throws Exception {
         var repository = CookieCsrfTokenRepository.withHttpOnlyFalse();
         // 쿠키가 XSRF-TOKEN 이면 헤더는 X-XSRF-TOKEN 이어야 짝이 맞는다. 기본값은
         // X-CSRF-TOKEN 이라 어긋나는데, axios 같은 클라이언트가 이 관례를 보고 자동으로
@@ -108,9 +110,10 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/places/**", "/api/v1/routes",
                                 "/api/v1/graph", "/api/v1/client-config", "/api/v1/auth/csrf")
                         .permitAll()
-                        // 파이프라인 운영 기록 — 공개 데이터와 통계뿐이고 읽기만 있다.
-                        // 심사자가 로그인 없이 열어 봐야 하는 화면이다
-                        .requestMatchers(HttpMethod.GET, "/api/v1/admin/**").permitAll()
+                        // 파이프라인 운영 기록은 관리자만. 로그인 안 했으면 401, 일반 사용자는 403.
+                        // 권한을 세션에 굳히지 않고 요청마다 설정 목록을 본다(AdminPolicy).
+                        .requestMatchers("/api/v1/admin/**")
+                        .access((who, context) -> new AuthorizationDecision(adminPolicy.isAdmin(who.get())))
                         // 그래프 재적재는 운영 동작이다
                         .requestMatchers(HttpMethod.POST, "/api/v1/graph/reload").authenticated()
                         .requestMatchers("/api/**").authenticated()

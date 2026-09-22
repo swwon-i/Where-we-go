@@ -37,20 +37,31 @@ public class AccountController {
     private final AuthenticationManager authenticationManager;
     private final SecurityContextRepository contextRepository;
     private final SessionAuthenticationStrategy sessionStrategy;
+    private final AdminPolicy adminPolicy;
 
     public AccountController(
             AccountService accounts,
             AuthenticationManager authenticationManager,
             SecurityContextRepository contextRepository,
-            SessionAuthenticationStrategy sessionStrategy) {
+            SessionAuthenticationStrategy sessionStrategy,
+            AdminPolicy adminPolicy) {
         this.accounts = accounts;
         this.authenticationManager = authenticationManager;
         this.contextRepository = contextRepository;
         this.sessionStrategy = sessionStrategy;
+        this.adminPolicy = adminPolicy;
     }
 
-    /** 밖으로 나가는 계정 정보. 해시는 물론이고 로그인 아이디도 남에게는 보이지 않는다. */
-    public record Me(long userId, String loginId, String nickname) {}
+    private Me me(AppUser user) {
+        return new Me(user.id(), user.loginId(), user.nickname(), adminPolicy.isAdmin(user.loginId()));
+    }
+
+    /**
+     * 밖으로 나가는 계정 정보. 해시는 물론이고 로그인 아이디도 남에게는 보이지 않는다.
+     *
+     * @param admin 관리자인가. 화면이 메뉴를 보이거나 숨기는 데만 쓴다 — 실제로 막는 것은 서버다
+     */
+    public record Me(long userId, String loginId, String nickname, boolean admin) {}
 
     public record LoginRequest(String loginId, String password) {}
 
@@ -67,7 +78,7 @@ public class AccountController {
         authenticate(request.normalizedLoginId(), request.password(), httpRequest, httpResponse);
 
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(new Me(user.id(), user.loginId(), user.nickname()));
+                .body(me(user));
     }
 
     @PostMapping("/login")
@@ -78,7 +89,7 @@ public class AccountController {
 
         authenticate(request.loginId(), request.password(), httpRequest, httpResponse);
         var user = accounts.byId(currentUserId());
-        return new Me(user.id(), user.loginId(), user.nickname());
+        return me(user);
     }
 
     @PostMapping("/logout")
@@ -109,7 +120,7 @@ public class AccountController {
     @GetMapping("/me")
     public Me me() {
         var user = accounts.byId(currentUserId());
-        return new Me(user.id(), user.loginId(), user.nickname());
+        return me(user);
     }
 
     /**

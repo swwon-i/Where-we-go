@@ -52,8 +52,14 @@ route('/login', withCleanup(async () => {
 }));
 
 route('/explore', withCleanup(explorePage));
-// 파이프라인 운영 기록. 로그인 없이 열린다 — 심사자가 클론해서 바로 보는 화면이다.
-route('/admin', withCleanup(adminPage));
+// 파이프라인 운영 기록. 관리자만 — 서버가 403 으로 막고, 화면은 그 전에 안내한다.
+route('/admin', withCleanup(guard(async () => {
+  if (!currentUser().admin) {
+    render(notice('관리자만 볼 수 있는 화면입니다.'));
+    return;
+  }
+  await adminPage();
+})));
 route('/rooms', withCleanup(guard(roomsPage)));
 route('/rooms/:roomId', guard(roomPage));
 

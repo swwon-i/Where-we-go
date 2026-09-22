@@ -1,6 +1,7 @@
 package com.wherewego.admin;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -14,7 +15,9 @@ import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
@@ -23,8 +26,11 @@ import tools.jackson.databind.json.JsonMapper;
 /**
  * 운영 기록 API. 회차 둘(검수 결과가 있는 것 · SKIPPED)을 직접 넣고 읽는다 — 트랜잭션이라
  * 끝나면 사라진다. 실제 적재 기록이 몇 건이든 결과가 흔들리지 않도록, 넣은 회차만 골라 본다.
+ *
+ * <p>관리자는 {@code admin_tester} 하나로 지정한다. 설정이 다르므로 이 클래스는 컨텍스트를 따로
+ * 띄운다 — {@code with(csrf())} 가 다른 테스트의 컨텍스트를 건드릴 일도 없다.
  */
-@SpringBootTest
+@SpringBootTest(properties = "wwg.admin-login-ids=Admin_Tester")
 @AutoConfigureMockMvc
 @Transactional
 @EnabledIf("databaseIsUp")
@@ -44,11 +50,32 @@ class AdminFlowTest {
 
     private final JsonMapper json = JsonMapper.builder().build();
 
+    private static final String PW = "s3cret-pw";
+
     private long checked;
     private long skipped;
+    private MockHttpSession admin;
+    private MockHttpSession user;
+
+    private MockHttpSession signUp(String nickname, String loginId) throws Exception {
+        var session = new MockHttpSession();
+        mvc.perform(post("/api/v1/auth/signup")
+                        .session(session)
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"nickname":"%s","loginId":"%s",
+                                 "password":"%s","passwordConfirm":"%s"}
+                                """.formatted(nickname, loginId, PW, PW)))
+                .andExpect(status().isCreated());
+        return session;
+    }
 
     @BeforeEach
-    void twoRuns() {
+    void twoRuns() throws Exception {
+        admin = signUp("관리인", "admin_tester");
+        user = signUp("그냥손님", "plain_user");
+
         checked = jdbc.queryForObject("""
                 INSERT INTO ingest_run (source, snapshot_date, status, rows_total, rows_valid, rows_rejected,
                                         rows_new, rows_kept, rows_vanished, rows_closed, duration_ms)
@@ -66,22 +93,47 @@ class AdminFlowTest {
     }
 
     private JsonNode getJson(String url) throws Exception {
-        var body = mvc.perform(get(url)).andExpect(status().isOk()).andReturn().getResponse()
+        var body = mvc.perform(get(url).session(admin)).andExpect(status().isOk()).andReturn().getResponse()
                 .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
         return json.readTree(body);
     }
 
     @Test
-    @DisplayName("로그인 없이 읽힌다 — 심사자가 클론해서 바로 여는 화면이다")
-    void readableWithoutLogin() throws Exception {
-        mvc.perform(get("/api/v1/admin/ingest-runs")).andExpect(status().isOk());
-        mvc.perform(get("/api/v1/admin/graph-stats")).andExpect(status().isOk());
+    @DisplayName("로그인하지 않았으면 401")
+    void anonymousIs401() throws Exception {
+        mvc.perform(get("/api/v1/admin/ingest-runs")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/v1/admin/graph-stats")).andExpect(status().isUnauthorized());
     }
 
     @Test
-    @DisplayName("쓰기는 열려 있지 않다")
+    @DisplayName("일반 사용자는 403 — 로그인만으로는 안 된다")
+    void plainUserIs403() throws Exception {
+        mvc.perform(get("/api/v1/admin/ingest-runs").session(user)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/v1/admin/validation-results").session(user)).andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("설정에 적힌 관리자는 대소문자와 상관없이 열린다")
+    void adminIs200() throws Exception {
+        mvc.perform(get("/api/v1/admin/ingest-runs").session(admin)).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("/auth/me 가 관리자 여부를 알려 준다 — 화면이 메뉴를 보이거나 숨긴다")
+    void meTellsAdmin() throws Exception {
+        var a = json.readTree(mvc.perform(get("/api/v1/auth/me").session(admin)).andReturn()
+                .getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8));
+        var u = json.readTree(mvc.perform(get("/api/v1/auth/me").session(user)).andReturn()
+                .getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8));
+        assertThat(a.get("admin").asBoolean()).isTrue();
+        assertThat(u.get("admin").asBoolean()).isFalse();
+    }
+
+    @Test
+    @DisplayName("관리자라도 쓰기는 열려 있지 않다")
     void noWrites() throws Exception {
-        mvc.perform(post("/api/v1/admin/ingest-runs")).andExpect(status().is4xxClientError());
+        mvc.perform(post("/api/v1/admin/ingest-runs").session(admin).with(csrf()))
+                .andExpect(status().is4xxClientError());
     }
 
     @Test
@@ -122,9 +174,12 @@ class AdminFlowTest {
     @Test
     @DisplayName("잘못된 쪽 크기·심각도는 400")
     void rejectsBadParams() throws Exception {
-        mvc.perform(get("/api/v1/admin/validation-results?size=501")).andExpect(status().isBadRequest());
-        mvc.perform(get("/api/v1/admin/validation-results?severity=INFO")).andExpect(status().isBadRequest());
-        mvc.perform(get("/api/v1/admin/validation-results?page=-1")).andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/admin/validation-results?size=501").session(admin))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/admin/validation-results?severity=INFO").session(admin))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/admin/validation-results?page=-1").session(admin))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

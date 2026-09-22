@@ -29,6 +29,10 @@ export async function loadCurrentUser() {
 }
 
 function paintHeader() {
+  // 관리자 메뉴는 관리자에게만 보인다. 숨기는 것은 화면 정리일 뿐이고, 막는 것은 서버다.
+  const adminLink = document.getElementById('nav-admin');
+  if (adminLink) adminLink.hidden = !current?.admin;
+
   const box = document.getElementById('who');
   if (!box) return;
 
