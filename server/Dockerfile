@@ -18,6 +18,9 @@ WORKDIR /src
 # 의존성 레이어를 소스와 분리해 캐시가 살아 있게 한다.
 COPY server/gradlew server/settings.gradle server/build.gradle ./
 COPY server/gradle ./gradle
+# 실행 권한은 git 에 기록돼 있지만(100755), 압축본으로 받거나 권한을 잃은 체크아웃에서도 돌게 한다.
+# 리눅스에서 이것 없이 빌드하다 "./gradlew: Permission denied" (exit 126) 로 죽었다.
+RUN chmod +x gradlew
 RUN ./gradlew --no-daemon dependencies > /dev/null 2>&1 || true
 
 COPY server/src ./src
