@@ -16,6 +16,8 @@ services:
     environment:
       WWG_COOKIE_SECURE: "true"
       WWG_RATE_LIMIT: "true"
+      # 화면을 같은 서버가 내려주므로 다른 출처를 허용할 이유가 없다
+      WWG_CORS_ORIGINS: ""
       # Caddy 가 붙이는 X-Forwarded-For/Proto 를 믿는다. 횟수 제한이 접속자 IP 를 보고,
       # 서버가 요청을 https 로 인식해야 보안 쿠키가 나간다. 8080 이 밖에 열려 있지 않아서
       # 이 헤더를 붙일 수 있는 것은 Caddy 뿐이다.

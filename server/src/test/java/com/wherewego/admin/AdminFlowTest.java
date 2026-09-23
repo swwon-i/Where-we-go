@@ -113,6 +113,13 @@ class AdminFlowTest {
     }
 
     @Test
+    @DisplayName("그래프 재적재도 관리자만 — 60만 행을 다시 읽는 운영 동작이다")
+    void reloadIsAdminOnly() throws Exception {
+        mvc.perform(post("/api/v1/graph/reload").with(csrf())).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/v1/graph/reload").session(user).with(csrf())).andExpect(status().isForbidden());
+    }
+
+    @Test
     @DisplayName("설정에 적힌 관리자는 대소문자와 상관없이 열린다")
     void adminIs200() throws Exception {
         mvc.perform(get("/api/v1/admin/ingest-runs").session(admin)).andExpect(status().isOk());

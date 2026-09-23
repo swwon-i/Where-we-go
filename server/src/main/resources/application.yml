@@ -22,6 +22,9 @@ wwg:
   # 로컬 테스트는 같은 IP 에서 수십 번 가입한다.
   rate-limit:
     enabled: ${WWG_RATE_LIMIT:false}
+  # 다른 출처에서 세션 쿠키를 붙여 API 를 부를 수 있는 곳. 운영에서는 빈 값 —
+  # 서버가 화면을 같이 내려주므로 CORS 가 필요 없다 (docker-compose.prod.yml).
+  cors-origins: ${WWG_CORS_ORIGINS:http://localhost:5173,http://localhost:8080}
 
 server:
   port: 8080

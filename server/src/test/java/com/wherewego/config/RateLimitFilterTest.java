@@ -90,6 +90,23 @@ class RateLimitFilterTest {
     }
 
     @Test
+    @DisplayName("로그인 없이 열린 곳도 센다 — 경로 탐색은 한 번에 다익스트라가 돈다")
+    void publicRoutesAreLimited() throws Exception {
+        var filter = new RateLimitFilter(true, clock);
+        for (int i = 0; i < 60; i++) call(filter, "GET", "/api/v1/routes", "1.1.1.1");
+        assertThat(call(filter, "GET", "/api/v1/routes", "1.1.1.1")).isEqualTo(429);
+        assertThat(call(filter, "GET", "/api/v1/places/nearby", "1.1.1.1")).isEqualTo(200);   // 장소는 따로
+    }
+
+    @Test
+    @DisplayName("초대 코드 찍어 보기도 센다")
+    void joinByCodeIsLimited() throws Exception {
+        var filter = new RateLimitFilter(true, clock);
+        for (int i = 0; i < 30; i++) call(filter, "POST", "/api/v1/rooms/join", "1.1.1.1");
+        assertThat(call(filter, "POST", "/api/v1/rooms/join", "1.1.1.1")).isEqualTo(429);
+    }
+
+    @Test
     @DisplayName("끄면 아무것도 막지 않는다 — 로컬과 테스트의 기본값")
     void disabled() throws Exception {
         var filter = new RateLimitFilter(false, clock);

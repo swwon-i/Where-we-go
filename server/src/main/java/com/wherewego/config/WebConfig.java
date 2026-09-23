@@ -11,10 +11,23 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
 
+    /**
+     * 다른 출처에서 **세션 쿠키를 붙여** API 를 부를 수 있는 곳. 기본은 Vite 개발 서버다.
+     *
+     * <p>운영에서는 비운다(docker-compose.prod.yml) — 서버가 화면을 같이 내려주므로 CORS 가
+     * 필요 없고, 목록에 남은 출처는 "그 주소에서 뜬 페이지가 로그인한 사용자의 자격으로 우리 API 를
+     * 부를 수 있다"는 뜻이다. 빈 값이면 매핑을 만들지 않는다.
+     */
+    @Value("${wwg.cors-origins:http://localhost:5173,http://localhost:8080}")
+    private String corsOrigins;
+
     @Override
     public void addCorsMappings(CorsRegistry registry) {
+        var origins = java.util.Arrays.stream(corsOrigins.split(","))
+                .map(String::trim).filter(s -> !s.isEmpty()).toArray(String[]::new);
+        if (origins.length == 0) return;
         registry.addMapping("/api/**")
-                .allowedOrigins("http://localhost:5173", "http://localhost:8080")
+                .allowedOrigins(origins)
                 .allowedMethods("GET", "POST", "PUT", "DELETE")
                 // 세션 쿠키를 주고받아야 하므로 자격 증명을 허용한다.
                 // 이것을 켜면 allowedOrigins 에 "*" 를 쓸 수 없다 — 출처를 못박아야 한다.

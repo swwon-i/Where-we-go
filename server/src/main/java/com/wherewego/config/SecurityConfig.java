@@ -114,8 +114,10 @@ public class SecurityConfig {
                         // 권한을 세션에 굳히지 않고 요청마다 설정 목록을 본다(AdminPolicy).
                         .requestMatchers("/api/v1/admin/**")
                         .access((who, context) -> new AuthorizationDecision(adminPolicy.isAdmin(who.get())))
-                        // 그래프 재적재는 운영 동작이다
-                        .requestMatchers(HttpMethod.POST, "/api/v1/graph/reload").authenticated()
+                        // 그래프 재적재는 운영 동작이다 — 60만 행을 다시 읽으므로 관리자만.
+                        // 예전에는 로그인만 하면 누구나 부를 수 있었다.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/graph/reload")
+                        .access((who, context) -> new AuthorizationDecision(adminPolicy.isAdmin(who.get())))
                         .requestMatchers("/api/**").authenticated()
                         // 정적 파일(지도 화면)
                         .anyRequest().permitAll())
