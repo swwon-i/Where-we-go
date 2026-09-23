@@ -36,8 +36,10 @@ fi
 } >> "$LOG"
 
 # .env 의 COMPOSE_FILE 을 compose 가 읽으므로 서버에서는 prod 설정이 자동으로 붙는다.
+# --user: 이미지의 기본 사용자는 uid 1000 인데 서버 계정이 1000 이 아닐 수 있다(GCP 가 그렇다).
+# 그대로 두면 받은 파일을 csv/ 에 쓰지 못한다 — Permission denied 로 죽었다.
 run_etl() {
-    docker compose --profile etl run --rm -T etl "$@" >> "$LOG" 2>&1
+    docker compose --profile etl run --rm -T --user "$(id -u):$(id -g)" etl "$@" >> "$LOG" 2>&1
 }
 
 run_etl etl.fetch --source all

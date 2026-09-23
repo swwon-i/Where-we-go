@@ -111,6 +111,9 @@ WWG_KAKAO_JS_KEY=<카카오 JavaScript 키>
 WWG_ADMIN_LOGIN_IDS=<관리자 아이디>
 ```
 
+비밀번호는 서버에서 `openssl rand -base64 24` 로 만들면 된다. **공백과 따옴표만 피한다** —
+ETL 이 쓰는 접속 문자열에 그대로 들어가기 때문이다(`/ + = @ :` 는 괜찮다).
+
 `WWG_DB_PASSWORD` 는 **DB 를 처음 만들 때만** 들어간다. 나중에 바꾸려면 DB 안에서 `ALTER USER` 로 바꾸고 `.env` 도 맞춘다.
 
 ## 5. 데이터 옮기기
@@ -159,8 +162,15 @@ docker compose logs -f caddy        # "certificate obtained successfully" 가 �
 
 ```bash
 docker compose --profile etl build etl
-etl/run_daily.sh && tail -30 etl/out/logs/ingest-$(date +%Y%m%d).log     # 한 번 손으로
+etl/run_daily.sh; tail -40 etl/out/logs/ingest-$(date +%Y%m%d).log       # 한 번 손으로
 etl/install_cron.sh                                                       # cron 등록 (22:00)
+```
+
+손으로 컨테이너를 직접 부를 때는 **`--user` 를 붙인다** — 이미지의 기본 사용자(uid 1000)가 서버 계정과
+다르면 받은 파일을 `csv/` 에 쓰지 못한다.
+
+```bash
+docker compose --profile etl run --rm --user "$(id -u):$(id -g)" etl etl.fetch --source all
 ```
 
 처음 손으로 돌리면 원본 두 파일(약 209MB)을 받는데, 서버에는 `csv/` 가 비어 있으므로
