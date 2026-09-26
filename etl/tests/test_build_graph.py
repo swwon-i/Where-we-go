@@ -8,9 +8,11 @@ import numpy as np
 
 from etl.build_graph import (
     BUS_HOUR_COLS,
+    BUS_STOP_COORD_FIX,
     NO_SERVICE,
     TRANSFER_PLACEHOLDER_SEC,
     aggregate_bus_sections,
+    apply_stop_coord_fix,
     board_weights_by_hour,
     calibrate_transfers,
     load_measured_transfers,
@@ -21,6 +23,40 @@ from etl.build_graph import (
     subway_service_hours,
     summarize_counts,
 )
+
+
+class TestApplyStopCoordFix:
+    """원본 좌표가 틀린 정류장만 보정한다. 나머지는 손대지 않는다."""
+
+    def _master(self, rows):
+        df = pd.DataFrame(rows, columns=["정류장_ID", "lng", "lat"])
+        return df
+
+    def test_replaces_listed_stop(self):
+        master = self._master([["113900266", 127.075, 37.6136], ["113900164", 126.9174, 37.5669]])
+        out, fixed, stale = apply_stop_coord_fix(master, {"113900266": (126.9176417, 37.5672426)})
+        row = out[out["정류장_ID"] == "113900266"].iloc[0]
+        assert (round(row["lng"], 5), round(row["lat"], 5)) == (126.91764, 37.56724)
+        assert (fixed, stale) == (1, [])
+
+    def test_leaves_others_alone(self):
+        master = self._master([["113900266", 127.075, 37.6136], ["113900164", 126.9174, 37.5669]])
+        out, _, _ = apply_stop_coord_fix(master, {"113900266": (126.9176417, 37.5672426)})
+        row = out[out["정류장_ID"] == "113900164"].iloc[0]
+        assert (row["lng"], row["lat"]) == (126.9174, 37.5669)
+
+    def test_reports_ids_missing_from_master(self):
+        """원본이 고쳐졌거나 정류장이 사라지면 목록이 낡는다 — 조용히 넘어가지 않는다."""
+        master = self._master([["113900164", 126.9174, 37.5669]])
+        out, fixed, stale = apply_stop_coord_fix(master, {"999999999": (126.0, 37.0)})
+        assert (fixed, stale) == (0, ["999999999"])
+        assert len(out) == 1
+
+    def test_real_list_is_seoul(self):
+        """실제 보정 목록의 좌표가 서울 안인지 — 자릿수를 잘못 적으면 여기서 걸린다."""
+        for stop_id, (lng, lat) in BUS_STOP_COORD_FIX.items():
+            assert 126.7 < lng < 127.2, stop_id
+            assert 37.4 < lat < 37.7, stop_id
 
 
 class TestSplitUnpricedRoutes:

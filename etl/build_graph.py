@@ -854,6 +854,36 @@ def split_unpriced_routes(
     return sections[has].reset_index(drop=True), dropped
 
 
+#: 원본 정류장마스터의 좌표가 틀린 정류장. `정류장_ID → (경도, 위도)`.
+#:
+#: 노선의 앞뒤 정류장과 1~15km 어긋나 있어, 그 구간을 지나면 직선거리 기준 148~1,155km/h 가
+#: 나왔다. 좌표가 틀리면 빠른 구간만 생기는 것이 아니라 **엉뚱한 자리에서 그 노선을 탈 수 있게**
+#: 된다. 원본이 고쳐지면 이 목록에서 빼면 된다.
+BUS_STOP_COORD_FIX: dict[str, tuple[float, float]] = {
+    "113900266": (126.9176417, 37.5672426),   # 사천고가앞 (ARS 14716) · 마포06 — 원본은 14.8km 밖
+    "113900038": (126.9475662, 37.5386883),   # S마트 (ARS 14541) · 마포01·02 — 원본은 1.0km 밖
+    "120900051": (126.9260000, 37.4611000),   # 삼성산주공정문 (ARS 21539) · 관악08 — 원본은 2.0km 밖
+}
+
+
+def apply_stop_coord_fix(
+    master: pd.DataFrame, fixes: dict[str, tuple[float, float]] = BUS_STOP_COORD_FIX
+) -> tuple[pd.DataFrame, int, list[str]]:
+    """정류장마스터의 좌표를 보정한다. `(보정한 마스터, 보정 수, 원본에 없는 ID)`.
+
+    원본에 없는 ID 는 정류장이 사라졌거나 번호가 바뀐 것이다 — 낡은 목록을 들고 있지 않도록
+    부르는 쪽이 경고한다.
+    """
+    out = master.copy()
+    ids = set(out["정류장_ID"])
+    stale = sorted(k for k in fixes if k not in ids)
+    for stop_id, (lng, lat) in fixes.items():
+        hit = out["정류장_ID"] == stop_id
+        out.loc[hit, "lng"] = lng
+        out.loc[hit, "lat"] = lat
+    return out, len(fixes) - len(stale), stale
+
+
 def insert_bus_nodes_edges(
     conn, build_id: int, sections: pd.DataFrame, headways: dict[str, int]
 ) -> dict[str, int]:
@@ -876,6 +906,7 @@ def insert_bus_nodes_edges(
         master = pd.read_csv(BUS_STOP_PATH, encoding="cp949", dtype=str)
         master["lat"] = pd.to_numeric(master["위도"], errors="coerce")
         master["lng"] = pd.to_numeric(master["경도"], errors="coerce")
+        master, stats["coord_fixed"], stats["coord_fix_stale"] = apply_stop_coord_fix(master)
         master = master.dropna(subset=["lat", "lng"])
 
         used = set(sections["출발_정류장_ID"]) | set(sections["도착_정류장_ID"])
@@ -890,7 +921,11 @@ def insert_bus_nodes_edges(
             """
             INSERT INTO transit_stop (mode, source_id, name, geom)
             SELECT 'BUS', sid, name, ST_Transform(ST_SetSRID(ST_MakePoint(lng, lat), 4326), %s)
-            FROM _bs ON CONFLICT (mode, source_id) DO NOTHING
+            FROM _bs
+            -- transit_stop 은 빌드를 넘어 남는다. DO NOTHING 이면 원본에서 이름·좌표가 바뀌어도
+            -- 처음 들어간 값이 영영 남는다 — 좌표 보정(BUS_STOP_COORD_FIX)도 먹지 않았다.
+            ON CONFLICT (mode, source_id) DO UPDATE
+                SET name = EXCLUDED.name, geom = EXCLUDED.geom
             """,
             (TARGET_EPSG,),
         )
@@ -1251,7 +1286,11 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  버스 정류장 {bs['stops']:,} · 플랫폼 {bs['platforms']:,} · "
                       f"RIDE {bs['ride']:,} · BOARD {bs['board']:,}", flush=True)
                 print(f"    구간 {bs['sections']:,} (좌표 없어 제외 {bs['sections_dropped']:,}) · "
-                      f"배차 없어 뺀 노선 {len(unpriced_routes)}", flush=True)
+                      f"배차 없어 뺀 노선 {len(unpriced_routes)} · "
+                      f"좌표 보정 {bs['coord_fixed']}개", flush=True)
+                if bs["coord_fix_stale"]:
+                    print(f"    ⚠ 좌표 보정 목록에 있는데 원본에 없는 정류장: "
+                          f"{', '.join(bs['coord_fix_stale'])} — BUS_STOP_COORD_FIX 를 확인할 것", flush=True)
                 if unpriced_routes:
                     names = bus_routes.set_index("노선_ID")["노선_명칭"]
                     print("      " + ", ".join(names.get(r, r) for r in unpriced_routes), flush=True)
