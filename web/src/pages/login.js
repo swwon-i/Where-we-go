@@ -17,11 +17,21 @@ export function setReturnTo(path) {
   returnTo = path;
 }
 
-const field = (id, label, type, extra = '') => `
+/**
+ * 입력 한 칸.
+ *
+ * `name` 은 서버가 `fields` 에 쓰는 이름이다. 화면의 id(`su-id`)와 서버의 이름(`loginId`)이
+ * 달라서 칸별 오류가 한 번도 붙지 않았다 — 그래서 "입력을 확인해 주세요" 만 보였다.
+ * 붙이는 쪽 기준을 서버 이름으로 맞춘다.
+ *
+ * `hint` 는 규칙을 미리 보여준다. 틀린 뒤에 알려주는 것보다 낫다.
+ */
+const field = (id, label, type, { name = id, extra = '', hint = '' } = {}) => `
   <label class="field">
     <span>${label}</span>
     <input id="${id}" type="${type}" ${extra}>
-    <em class="field-error" data-for="${id}" hidden></em>
+    ${hint ? `<small class="hint">${hint}</small>` : ''}
+    <em class="field-error" data-for="${name}" hidden></em>
   </label>`;
 
 export async function loginPage() {
@@ -37,22 +47,41 @@ export async function loginPage() {
 
       <form id="login-form" class="form">
         <em class="form-error" hidden></em>
-        ${field('login-id', '아이디', 'text', 'autocomplete="username" autofocus')}
-        ${field('login-pw', '비밀번호', 'password', 'autocomplete="current-password"')}
+        ${field('login-id', '아이디', 'text', {
+          name: 'loginId',
+          extra: 'autocomplete="username" autofocus',
+        })}
+        ${field('login-pw', '비밀번호', 'password', {
+          name: 'password',
+          extra: 'autocomplete="current-password"',
+        })}
         <button class="primary" type="submit">로그인</button>
       </form>
 
       <form id="signup-form" class="form" hidden>
         <em class="form-error" hidden></em>
-        ${field('su-nickname', '닉네임', 'text', 'autocomplete="nickname"')}
-        ${field('su-id', '아이디', 'text', 'autocomplete="username"')}
-        ${field('su-pw', '비밀번호', 'password', 'autocomplete="new-password"')}
-        ${field('su-pw2', '비밀번호 확인', 'password', 'autocomplete="new-password"')}
+        ${field('su-nickname', '닉네임', 'text', {
+          name: 'nickname',
+          // maxlength 만 둔다. minlength·pattern 을 걸면 브라우저가 먼저 막으면서
+          // "요청한 형식과 일치시키세요" 같은 자기 말풍선을 띄워 우리 안내를 덮는다.
+          extra: 'autocomplete="nickname" maxlength="20"',
+          hint: '2~20자. 다른 참가자에게 보이는 이름입니다.',
+        })}
+        ${field('su-id', '아이디', 'text', {
+          name: 'loginId',
+          extra: 'autocomplete="username" maxlength="20"',
+          hint: '영문·숫자·밑줄(_) 4~20자. 대소문자는 구분하지 않습니다.<br>로그인에만 쓰는 이름입니다 — 공백·한글·그 밖의 기호는 쓸 수 없습니다.',
+        })}
+        ${field('su-pw', '비밀번호', 'password', {
+          name: 'password',
+          extra: 'autocomplete="new-password" maxlength="64"',
+          hint: '8~64자.',
+        })}
+        ${field('su-pw2', '비밀번호 확인', 'password', {
+          name: 'passwordConfirm',
+          extra: 'autocomplete="new-password" maxlength="64"',
+        })}
         <button class="primary" type="submit">가입하고 시작하기</button>
-        <p class="hint">
-          닉네임은 다른 참가자에게 보이는 이름입니다. 아이디는 로그인에만 씁니다.<br>
-          비밀번호는 8자 이상.
-        </p>
       </form>
 
       <p class="foot">
@@ -110,10 +139,21 @@ async function submit(form, call) {
         showError(form, '서버에 연결하지 못했습니다.');
         return;
       }
-      showError(form, e.message);
+      showError(form, summarize(e));
       showFieldErrors(form, e.fields);
     }
   });
+}
+
+/**
+ * 폼 위쪽에 쓸 한 줄.
+ *
+ * 서버의 "입력을 확인해 주세요" 만 띄우면 무엇이 틀렸는지 알 수 없다. 틀린 칸의 이유를
+ * 그대로 모아서 보여준다 — 칸 아래 메시지를 못 보고 지나치는 경우가 있다.
+ */
+function summarize(e) {
+  const reasons = Object.values(e.fields ?? {}).filter(Boolean);
+  return reasons.length ? reasons.join(' · ') : e.message;
 }
 
 /** 이미 로그인한 사람이 로그인 화면으로 오면 방 목록으로 보낸다. */

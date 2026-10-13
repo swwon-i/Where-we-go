@@ -42,6 +42,11 @@ import org.springframework.web.filter.OncePerRequestFilter;
  *
  * <p>고정 창(fixed window)이다. 창 경계에서 두 배까지 통과할 수 있지만 위 목적에는 충분하다.
  *
+ * <h2>무엇을 세지 않나</h2>
+ *
+ * 입력 형식이 틀려 400 으로 돌려보낸 요청은 세지 않는다. 그렇지 않으면 가입 규칙을 몰라 몇 번
+ * 틀린 사람이 한 시간 잠긴다. 통과한 요청과 인증 실패(401)는 센다.
+ *
  * <h2>IP</h2>
  *
  * {@code request.getRemoteAddr()} 를 쓴다. 운영에서는 Caddy 뒤라 그대로면 전부 Caddy 의 주소가
@@ -99,7 +104,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
         long now = clock.millis();
         long windowMs = rule.window().toMillis();
 
-        var w = windows.compute(rule.name() + '|' + request.getRemoteAddr(), (k, old) ->
+        String key = rule.name() + '|' + request.getRemoteAddr();
+        var w = windows.compute(key, (k, old) ->
                 old == null || now - old.startMillis() >= windowMs
                         ? new Window(now, 1)
                         : new Window(old.startMillis(), old.count() + 1));
@@ -117,6 +123,21 @@ public class RateLimitFilter extends OncePerRequestFilter {
             return;
         }
         chain.doFilter(request, response);
+
+        // 형식이 틀려 돌려보낸 요청(400)은 세지 않는다. 가입은 한 시간에 다섯 번인데 아이디
+        // 규칙을 몰라 몇 번 틀리면 정작 가입을 못 하고 한 시간을 기다리게 된다. 막으려는 것은
+        // 계정을 찍어 내는 쪽이고 그것은 통과하는 요청이다 — 비밀번호 대입(401)은 그대로 센다.
+        if (response.getStatus() == HttpServletResponse.SC_BAD_REQUEST) {
+            uncount(key, w.startMillis());
+        }
+    }
+
+    /** 세지 않기로 한 요청을 창에서 뺀다. 그 사이 창이 바뀌었으면 건드리지 않는다. */
+    private void uncount(String key, long windowStart) {
+        windows.computeIfPresent(key, (k, old) ->
+                old.startMillis() == windowStart && old.count() > 0
+                        ? new Window(old.startMillis(), old.count() - 1)
+                        : old);
     }
 
     private static Rule ruleFor(HttpServletRequest request) {

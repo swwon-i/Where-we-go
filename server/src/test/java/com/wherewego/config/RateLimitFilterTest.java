@@ -106,6 +106,39 @@ class RateLimitFilterTest {
         assertThat(call(filter, "POST", "/api/v1/rooms/join", "1.1.1.1")).isEqualTo(429);
     }
 
+    /** 뒤쪽에서 이 상태 코드로 돌려보낸 것처럼 한 번 호출한다. */
+    private int callReturning(RateLimitFilter filter, int status, String path, String ip) throws Exception {
+        var request = new MockHttpServletRequest("POST", path);
+        request.setRemoteAddr(ip);
+        var response = new MockHttpServletResponse();
+        filter.doFilter(request, response, (req, res) -> ((MockHttpServletResponse) res).setStatus(status));
+        return response.getStatus();
+    }
+
+    @Test
+    @DisplayName("입력 형식이 틀린 요청(400)은 세지 않는다 — 오타로 한 시간 잠기지 않게")
+    void badInputDoesNotCount() throws Exception {
+        var filter = new RateLimitFilter(true, clock);
+        for (int i = 0; i < 20; i++) {
+            assertThat(callReturning(filter, 400, "/api/v1/auth/signup", "1.1.1.1")).isEqualTo(400);
+        }
+        // 다섯 번은 그대로 남아 있다.
+        for (int i = 0; i < 5; i++) {
+            assertThat(call(filter, "POST", "/api/v1/auth/signup", "1.1.1.1")).isEqualTo(200);
+        }
+        assertThat(call(filter, "POST", "/api/v1/auth/signup", "1.1.1.1")).isEqualTo(429);
+    }
+
+    @Test
+    @DisplayName("비밀번호가 틀린 로그인(401)은 센다 — 대입을 막는 것이 목적이다")
+    void failedLoginCounts() throws Exception {
+        var filter = new RateLimitFilter(true, clock);
+        for (int i = 0; i < 20; i++) {
+            assertThat(callReturning(filter, 401, "/api/v1/auth/login", "1.1.1.1")).isEqualTo(401);
+        }
+        assertThat(call(filter, "POST", "/api/v1/auth/login", "1.1.1.1")).isEqualTo(429);
+    }
+
     @Test
     @DisplayName("끄면 아무것도 막지 않는다 — 로컬과 테스트의 기본값")
     void disabled() throws Exception {

@@ -20,8 +20,11 @@ class RoomExceptionHandler {
         for (var error : e.getBindingResult().getFieldErrors()) {
             fields.putIfAbsent(error.getField(), error.getDefaultMessage());
         }
-        return ResponseEntity.badRequest()
-                .body(Map.of("message", "입력을 확인해 주세요", "fields", fields));
+        // 한 줄 메시지에도 이유를 담는다 — 어느 칸이 왜 틀렸는지 알 수 없으면 고칠 수가 없다.
+        String message = fields.isEmpty()
+                ? "입력을 확인해 주세요"
+                : String.join(" · ", fields.values());
+        return ResponseEntity.badRequest().body(Map.of("message", message, "fields", fields));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

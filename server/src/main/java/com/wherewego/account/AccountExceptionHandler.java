@@ -30,8 +30,12 @@ class AccountExceptionHandler {
                     : error.getField();
             fields.putIfAbsent(field, error.getDefaultMessage());
         }
-        return ResponseEntity.badRequest()
-                .body(Map.of("message", "입력을 확인해 주세요", "fields", fields));
+        // 한 줄 메시지에도 이유를 담는다. "입력을 확인해 주세요" 만 돌려주면 화면이 칸별
+        // 메시지를 붙이지 못하는 순간 사용자는 무엇이 틀렸는지 알 길이 없다.
+        String message = fields.isEmpty()
+                ? "입력을 확인해 주세요"
+                : String.join(" · ", fields.values());
+        return ResponseEntity.badRequest().body(Map.of("message", message, "fields", fields));
     }
 
     @ExceptionHandler(AccountService.DuplicateException.class)
