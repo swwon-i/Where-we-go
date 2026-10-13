@@ -33,13 +33,18 @@ public class PlaceController {
         return repository.findNearby(lng, lat, radius, category, includeClosed, limit);
     }
 
-    /** 상호명 부분 일치 검색. 좌표를 주면 거리순 정렬된다. */
+    /**
+     * 상호명 부분 일치 검색. 좌표를 주면 거리순으로 정렬된다.
+     *
+     * <p>{@code radius} 는 선택이다 — 주지 않으면 서울 전역에서 찾는다. 이름으로 찾는 사람은
+     * 지도에 보이는 곳만 찾는 것이 아니다.
+     */
     @GetMapping("/search")
     public List<Place> search(
             @RequestParam String q,
             @RequestParam(required = false) Double lng,
             @RequestParam(required = false) Double lat,
-            @RequestParam(defaultValue = "0") int radius,
+            @RequestParam(required = false) Integer radius,
             @RequestParam(required = false) String category,
             @RequestParam(defaultValue = "false") boolean includeClosed,
             @RequestParam(defaultValue = "0") int limit) {

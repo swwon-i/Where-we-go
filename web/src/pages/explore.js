@@ -60,25 +60,31 @@ async function search() {
   const params = {
     lng: center.lng,
     lat: center.lat,
-    radius: $('#radius').value,
     includeClosed: $('#closed').checked,
     limit: 100,
   };
+
+  // 상호명을 치면 반경을 보내지 않는다. 서울 전역에서 찾고, 지도 중심에서 가까운 순으로 받는다 —
+  // 이름을 아는 사람은 그 가게가 지금 보는 화면 밖에 있어도 찾으려는 것이다.
+  $('#radius').disabled = !!q;
 
   $('#stat').textContent = '검색 중…';
   const started = performance.now();
 
   try {
-    const places = q ? await api.search({ ...params, q }) : await api.nearby(params);
-    $('#stat').textContent = `${places.length}건 · ${Math.round(performance.now() - started)}ms`;
-    paint(places);
+    const places = q
+      ? await api.search({ ...params, q })
+      : await api.nearby({ ...params, radius: $('#radius').value });
+    const took = Math.round(performance.now() - started);
+    $('#stat').textContent = `${places.length}건 · ${took}ms${q ? ' · 서울 전역' : ''}`;
+    paint(places, q);
   } catch {
     $('#stat').textContent = '';
     $('#list').innerHTML = notice('서버에 연결하지 못했습니다.', 'bad');
   }
 }
 
-function paint(places) {
+function paint(places, q = '') {
   $('#list').innerHTML = places.length
     ? `<ul class="list">
         ${places.map((p, i) => `
@@ -91,7 +97,10 @@ function paint(places) {
             <div class="meta">${esc(p.roadAddress ?? p.jibunAddress ?? '')}</div>
           </li>`).join('')}
        </ul>`
-    : notice('결과가 없습니다.');
+    : notice(q
+      // 서울 전역을 뒤져도 없었다는 뜻이다. 담고 있는 것이 서울시 자료뿐이라는 것까지 말해 준다.
+      ? `서울시 안에서 "${esc(q)}"를 찾지 못했습니다.`
+      : '이 반경 안에 결과가 없습니다. 반경을 넓히거나 지도를 옮겨 보세요.');
 
   if (!mapView) return;
   mapView.clear();

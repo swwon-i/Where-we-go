@@ -516,7 +516,9 @@ async function findPlaces() {
   const center = mapView?.center() ?? { lat: 37.4979, lng: 127.0276 };
 
   try {
-    const places = await api.search({ q, lng: center.lng, lat: center.lat, radius: 5000, limit: 30 });
+    // 반경을 보내지 않는다 — 서울 전역에서 찾고 지도 중심에서 가까운 순으로 받는다.
+    // 반경에 가두면 강남을 보는 중에 강서구 가게를 담을 수 없다.
+    const places = await api.search({ q, lng: center.lng, lat: center.lat, limit: 30 });
     found = places;
     openKey = null;
     searched = true;

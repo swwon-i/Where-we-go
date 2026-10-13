@@ -80,12 +80,23 @@ public class PlaceRepository {
         return jdbc.query(sql, params, mapper(true));
     }
 
-    /** 상호명 부분 일치 검색. pg_trgm GIN 인덱스를 쓴다. */
+    /**
+     * 상호명 부분 일치 검색.
+     *
+     * <p><b>반경은 선택이다.</b> {@code radiusM} 이 없으면(null 이나 0 이하) 서울 전역에서 찾고,
+     * 좌표를 주면 그 지점에서 가까운 순으로 돌려준다. 이름을 아는 사람은 그 가게가 지도 밖에
+     * 있어도 찾으려는 것이다 — 강남을 보는 중에 강서구 가게를 못 찾으면 검색이 고장 난 것처럼
+     * 보인다. 반경을 주면 그 안으로 좁힌다(방 화면의 "이 근처에서" 같은 자리).
+     *
+     * <p>전역 검색은 서울 646,000 건을 훑어 100~200ms 다. GIN(trgm) 인덱스가 있지만 두 글자
+     * 패턴에서는 플래너가 쓰지 않는다 — 트라이그램이 하나뿐이라 후보가 전부 걸리기 때문이다.
+     * 횟수는 RateLimitFilter 가 막는다(10분에 300번).
+     */
     public List<Place> search(
             String q,
             Double lng,
             Double lat,
-            int radiusM,
+            Integer radiusM,
             String category,
             boolean includeClosed,
             int limit) {
@@ -96,18 +107,23 @@ public class PlaceRepository {
                 .addValue("limit", clampLimit(limit));
 
         var hasOrigin = lng != null && lat != null;
+        var bounded = hasOrigin && radiusM != null && radiusM > 0;
         var sql = new StringBuilder(SELECT_COLUMNS);
 
         if (hasOrigin) {
-            params.addValue("lng", lng).addValue("lat", lat).addValue("radius", clampRadius(radiusM));
+            params.addValue("lng", lng).addValue("lat", lat);
             sql.append("""
                     , ST_Distance(p.geom, q.g) AS distance_m
                     FROM poi p
                     CROSS JOIN LATERAL (
                         SELECT ST_Transform(ST_SetSRID(ST_MakePoint(:lng, :lat), 4326), 5186) AS g
                     ) q
-                    WHERE ST_DWithin(p.geom, q.g, :radius) AND p.name LIKE :q
+                    WHERE p.name LIKE :q
                     """);
+            if (bounded) {
+                params.addValue("radius", clampRadius(radiusM));
+                sql.append("  AND ST_DWithin(p.geom, q.g, :radius)\n");
+            }
         } else {
             sql.append("""
                     , NULL::float8 AS distance_m
