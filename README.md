@@ -81,6 +81,46 @@ OSM 보행망 ─┐
 
 ---
 
+## 폴더 구조
+
+```
+Where-we-go/
+├─ etl/                      파이썬. 원본을 받아 DB 에 넣고, 경로 그래프를 만든다
+│  ├─ fetch.py               LOCALDATA 인허가 CSV 받기 — .part 로 받아 검사한 것만 제자리로
+│  ├─ ingest.py              한 회차: raw → staging → 검수 → serving(poi), 회차 비교와 보관
+│  ├─ build_graph.py         보행망·지하철·버스를 graph_node / graph_edge 로
+│  ├─ subway_timing.py       시각표에서 역간 소요시간·배차·환승 도보시간
+│  ├─ route.py               서버 없이 그래프만으로 경로를 찍어 보는 확인용
+│  ├─ sources.py · db.py     원천 정의(컬럼·좌표계) · DB 접속
+│  ├─ verify_*.py            좌표계 판정과 정합성 확인 (결과는 out/*.json)
+│  ├─ validate/rules/        검수 규칙 SQL 6종 — COORD_MISSING, DUPLICATE_NAME_ADDR 등
+│  ├─ tests/                 pytest
+│  └─ run_daily.sh · .cmd    매일 22:00 실행 (install_cron.sh · register_daily_task.cmd 가 등록)
+├─ server/                   Spring Boot. 그래프를 메모리에 들고 길찾기와 API 를 맡는다
+│  └─ src/main/
+│     ├─ java/com/wherewego/
+│     │  ├─ place/           장소 — 반경 검색 · 상호명 검색 · 상세(출처·검수 기록)
+│     │  ├─ routing/         다익스트라(LongMinHeap) · 경로 조립(RouteBuilder) · 출발지 스냅
+│     │  ├─ graph/           DB 의 그래프를 CSR 배열로 적재해 들고 있는다
+│     │  ├─ matrix/          사람 × 후보 이동시간 행렬 (방마다 한 번에 하나)
+│     │  ├─ room/            방 · 초대 코드 · 출발지 · 후보
+│     │  ├─ account/         가입 · 세션 로그인 · 관리자 판정
+│     │  ├─ admin/           적재 회차 · 검수 집계 조회
+│     │  └─ config/          보안 · CORS · 요청 횟수 제한
+│     └─ resources/db/migration/   Flyway 스키마 V1~V11
+├─ web/                      Vite + 바닐라 JS. 빌드 결과는 서버 jar 안으로 들어간다
+│  └─ src/
+│     ├─ pages/              화면 하나당 파일 하나 — explore · rooms · room · matrix · login · admin
+│     ├─ api.js              서버 호출과 CSRF
+│     ├─ kakao.js            배경지도
+│     └─ router.js · dom.js · session.js · lines.js · style.css
+├─ deploy/Caddyfile          운영 앞단 — HTTPS 를 알아서 받는다
+├─ docs/                     배포 안내 · 성능 측정 결과 · 화면 이미지
+├─ csv/ · cache/             원본 CSV 와 내려받은 보행망. 저장소에 없고 실행하면 생긴다
+├─ docker-compose.yml        DB · Flyway · 서버 · ETL (+ .prod.yml 이 운영분을 덮어쓴다)
+└─ kakaomobility-project-plan.md   계획서 — 요구사항과 API 명세의 원본
+```
+
 ## 실행
 
 ```bash
