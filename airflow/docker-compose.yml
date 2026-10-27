@@ -1,0 +1,154 @@
+# 일일 받기·적재를 Airflow 로 돌려 보는 로컬 학습용 구성. 서버에는 올리지 않는다(README 의 "왜 서버는 cron 인가").
+#
+#   docker compose up -d db                     # 저장소 루트에서 — 적재할 DB 가 먼저 떠 있어야 한다
+#   cd airflow
+#   docker compose up airflow-init              # 처음 한 번
+#   docker compose up -d
+#   http://localhost:8081   airflow / airflow
+#
+# 공식 docker-compose.yaml(3.3.2)에서 줄였다. CeleryExecutor·Redis·worker·triggerer 를 빼고
+# LocalExecutor 로 돈다 — 노트북 한 대에서 태스크 다섯 개를 돌리는 데 분산 실행은 필요 없다.
+name: wwg-airflow
+
+x-airflow-common:
+  &airflow-common
+  build:
+    context: ../etl
+    dockerfile: ../airflow/Dockerfile
+  image: wwg-airflow:3.3.2
+  # 저장소 루트 .env 의 WWG_DB_PASSWORD 를 컨테이너에 넘긴다. etl.db.connect 가 읽는다.
+  # 위의 ${…} 치환은 이 폴더의 .env 만 보므로 거기서 꺼내 쓸 수 없다.
+  env_file:
+    - path: ../.env
+      required: false
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    # cron 표현식을 한국 시각으로 읽는다. 기본은 UTC 라 22:00 이 오전 7시가 된다.
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Seoul
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
+    AIRFLOW__API_AUTH__JWT_SECRET: airflow_jwt_secret
+    AIRFLOW__API_AUTH__JWT_ISSUER: airflow
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    # ETL 이 쓰는 값. 비밀번호는 .env 의 WWG_DB_PASSWORD 가 있으면 그쪽이 앞선다(etl/db.py).
+    WWG_DSN: "host=db port=5432 user=wherewego password=wherewego dbname=wherewego"
+    PYTHONPATH: /opt/wwg
+    PYTHONUTF8: '1'
+    TZ: Asia/Seoul
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    # 코드와 원본을 그대로 붙인다. 소스 경로가 작업 폴더 기준(csv/장소/…)이라 /opt/wwg 에서 돈다.
+    - ../etl:/opt/wwg/etl
+    - ../csv:/opt/wwg/csv
+  user: "${AIRFLOW_UID:-50000}:0"
+  networks:
+    - default
+    # 저장소 루트의 compose 가 만든 네트워크. 여기 붙어야 적재할 DB 를 `db` 로 찾는다.
+    - wwg
+  depends_on:
+    &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+
+services:
+  # Airflow 자신의 메타데이터 DB. 적재 대상(wwg-db)과 섞지 않는다.
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    # 8080 은 wwg-server 가 쓴다.
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # LocalExecutor 라 태스크가 이 컨테이너 안에서 돈다. 적재의 메모리도 여기서 쓴다.
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # 메타데이터 DB 를 만들고, 관리자 계정과 적재용 풀을 만든다. 다시 돌려도 안전하다.
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /opt/airflow/logs /opt/airflow/dags
+        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/logs /opt/airflow/dags
+        /entrypoint airflow version
+        # 적재는 한 번에 하나만 — 소스 둘이 동시에 판다스로 수십만 행을 올리면 메모리가 두 배가 되고
+        # 같은 category 표를 동시에 upsert 한다. 받기는 풀 밖이라 동시에 돈다.
+        /entrypoint airflow pools set wwg_db 1 "wwg-db 에 쓰는 적재 - 한 번에 하나"
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: airflow
+      _AIRFLOW_WWW_USER_PASSWORD: airflow
+    user: "0:0"
+    depends_on:
+      <<: *airflow-common-depends-on
+
+networks:
+  wwg:
+    external: true
+    name: where-we-go_default
+
+volumes:
+  airflow-db:
