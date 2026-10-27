@@ -66,6 +66,13 @@ run_etl() {
     docker compose --profile etl run --rm -T --user "$(id -u):$(id -g)" etl "$@" >> "$LOG" 2>&1
 }
 
+# 이미지를 먼저 최신 코드로 맞춘다. 코드는 이미지에 COPY 로 들어가 있어서 git pull 만 하면
+# 컨테이너는 예전 코드를 조용히 돈다(2026-10-27 에 그랬다). 코드가 그대로면 캐시로 몇 초다.
+# 빌드가 실패하면(네트워크 등) 있던 이미지로 계속 돈다 — 하루치 회차를 잃는 것보다 낫다.
+if ! docker compose --profile etl build etl >> "$LOG" 2>&1; then
+    echo "image build failed - running the existing image" >> "$LOG"
+fi
+
 run_etl etl.fetch --source all
 FETCH=$?
 
