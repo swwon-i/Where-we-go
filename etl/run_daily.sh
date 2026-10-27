@@ -7,10 +7,10 @@
 # 등록: etl/install_cron.sh     수동: etl/run_daily.sh
 #
 # 종료 코드는 run_daily.cmd 와 같다.
-#   0  성공 또는 SKIPPED (원본이 어제와 같음)
+#   0  성공 또는 SKIPPED (원본이 어제와 같음) · DB 에 닿지 못함(ingest 의 3 을 0 으로 바꾼다)
 #   1  준비 문제 (docker 없음 등)
+#   2  적재 실패 — 소스 하나 이상. 나머지 소스는 적재됐다
 #   4  받기 실패 — 기존 파일로 적재했다
-#   그 밖  적재 실패
 set -u
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -25,9 +25,33 @@ LOG="$LOGDIR/ingest-$(date +%Y%m%d).log"
 
 # cron 은 PATH 가 짧다. docker 가 /usr/bin 밖에 있으면 여기서 못 찾는다.
 PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+
+# 수동 실행이 cron 회차와 겹치면 두 적재가 같은 회차를 두고 다툰다. 뒤에 온 쪽이 물러난다.
+# flock 이 없으면 락 없이 돈다 — 없다고 매번 건너뛰면 회차가 영영 안 쌓인다.
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"$LOGDIR/.daily.lock"
+    if ! flock -n 9; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') already running - skipped" >> "$LOG"
+        exit 0
+    fi
+fi
+
+# 실패를 바깥에 알린다. healthchecks.io 는 핑이 **안 와도** 알려 주므로
+# 서버가 죽어 이 스크립트가 시작조차 못 한 날도 잡힌다.
+# 주소는 .env 의 WWG_HEALTHCHECK_URL (https://hc-ping.com/<uuid>). 없으면 알리지 않는다.
+HC_URL=$(sed -n 's/^WWG_HEALTHCHECK_URL=//p' "$REPO/.env" 2>/dev/null | tail -n 1 | tr -d '\r"')
+finish() {
+    if [ -n "$HC_URL" ]; then
+        # /<종료 코드> 로 보내면 0 은 성공, 그 밖은 실패로 잡힌다. 로그 끝을 본문으로 붙인다.
+        tail -n 40 "$LOG" | curl -fsS -m 10 --retry 3 -o /dev/null \
+            --data-binary @- "$HC_URL/$1" >/dev/null 2>&1 || true
+    fi
+    exit "$1"
+}
+
 if ! command -v docker >/dev/null 2>&1; then
     echo "docker not found" >> "$LOG"
-    exit 1
+    finish 1
 fi
 
 {
@@ -65,4 +89,4 @@ echo "exit code $CODE" >> "$LOG"
 # 오래된 로그는 90일 뒤 지운다. 기록의 원본은 DB 의 ingest_run 이다.
 find "$LOGDIR" -name 'ingest-*.log' -mtime +90 -delete 2>/dev/null
 
-exit "$CODE"
+finish "$CODE"

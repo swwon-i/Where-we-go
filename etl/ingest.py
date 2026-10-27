@@ -38,6 +38,7 @@ import hashlib
 import io
 import sys
 import time
+import traceback
 from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
@@ -73,6 +74,9 @@ CHUNK_ROWS = 50_000
 
 #: DB 에 닿지 못해 적재를 시작조차 못한 경우. 스케줄러가 '실패'와 구분할 수 있게 별도 코드를 준다.
 EXIT_DB_UNAVAILABLE = 3
+
+#: 소스 하나 이상이 적재에 실패했다. 잡히지 않은 예외의 1 은 '준비 문제'와 겹치므로 따로 준다.
+EXIT_INGEST_FAILED = 2
 
 #: DB 를 기다릴 때 다시 시도하는 간격(초).
 DB_RETRY_INTERVAL_SEC = 15
@@ -709,16 +713,30 @@ def main(argv: list[str] | None = None) -> int:
     if attempts > 1:
         print(f"DB 접속 {attempts}회째 성공 ({waited:.0f}초 기다림)")
 
+    # 소스끼리 격리한다. food 가 깨져도 rest 는 돈다 — 소스마다 트랜잭션이 따로라 가능하다.
+    # 뒷정리(rollback·FAILED 기록)는 ingest_source 가 하고, 여기서는 잡아서 모으기만 한다.
+    failed = []
     with connect() as conn:
         for source in targets:
-            ingest_source(conn, source, args.limit, args.force)
+            try:
+                ingest_source(conn, source, args.limit, args.force)
+            except Exception:  # noqa: BLE001 — 한 소스의 실패가 다음 소스를 막지 않게
+                traceback.print_exc()
+                failed.append(source.code)
+                if conn.closed:  # 연결이 끊겼으면(broken 포함) 다음 소스도 못 돈다
+                    break
 
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT status, count(*) FROM poi GROUP BY status ORDER BY status"
-            )
-            rows = cur.fetchall()
-    print("\npoi 합계:", ", ".join(f"{s} {n:,}" for s, n in rows) or "없음")
+        if not conn.closed:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT status, count(*) FROM poi GROUP BY status ORDER BY status"
+                )
+                rows = cur.fetchall()
+            print("\npoi 합계:", ", ".join(f"{s} {n:,}" for s, n in rows) or "없음")
+
+    if failed:
+        print(f"적재 실패: {', '.join(failed)}", file=sys.stderr)
+        return EXIT_INGEST_FAILED
     return 0
 
 

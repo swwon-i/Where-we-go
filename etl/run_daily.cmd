@@ -8,8 +8,11 @@ rem
 rem Register:  etl\register_daily_task.cmd
 rem Manual:    etl\run_daily.cmd
 rem
-rem Exit codes: 0 ok or skipped, 1 setup problem, 4 fetch failed (ingested old
-rem files), other = ingest failure.
+rem Exit codes:
+rem   0  ok, skipped, or database not reachable (ingest's 3 is turned into 0)
+rem   1  setup problem (no venv)
+rem   2  ingest failed for one or more sources; the other sources were loaded
+rem   4  fetch failed - ingested the existing files
 
 setlocal
 

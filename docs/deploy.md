@@ -109,6 +109,9 @@ WWG_DOMAIN=3-35-1-2.sslip.io
 WWG_DB_PASSWORD=<길고 무작위인 값>
 WWG_KAKAO_JS_KEY=<카카오 JavaScript 키>
 WWG_ADMIN_LOGIN_IDS=<관리자 아이디>
+
+# 선택. 일일 실행이 끝날 때 결과를 보내고, 핑이 안 오면 healthchecks.io 가 알린다
+WWG_HEALTHCHECK_URL=https://hc-ping.com/<uuid>
 ```
 
 비밀번호는 서버에서 `openssl rand -base64 24` 로 만들면 된다. **공백과 따옴표만 피한다** —
