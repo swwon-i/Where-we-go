@@ -120,6 +120,76 @@ class AdminFlowTest {
     }
 
     @Test
+    @DisplayName("계산 기록 집계도 관리자만 본다")
+    void matrixDailyIsAdminOnly() throws Exception {
+        mvc.perform(get("/api/v1/admin/matrix-runs/daily")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/v1/admin/matrix-runs/daily").session(user)).andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("계산 기록은 재시작 직후와 계산 못 한 요청을 뺀 기준으로 집계한다")
+    void matrixDailyAggregates() throws Exception {
+        jdbc.update("DELETE FROM matrix_run");  // 트랜잭션이라 끝나면 되돌아간다
+        String insert = "INSERT INTO matrix_run (room_id, status, graph_source, elapsed_ms, unreachable, created_at) "
+                + "VALUES (gen_random_uuid(), ?, ?, ?, ?, now() - ?::interval)";
+        jdbc.update(insert, "SUCCESS", "CACHE", 100, 2, "0 days");
+        jdbc.update(insert, "SUCCESS", "CACHE", 200, 0, "0 days");
+        jdbc.update(insert, "SUCCESS", "CACHE", 300, 0, "0 days");
+        jdbc.update(insert, "SUCCESS", "DB", 5000, 0, "0 days");
+        jdbc.update(insert, "ERROR", "CACHE", 9000, null, "0 days");
+        jdbc.update(insert, "NOT_COMPUTABLE", "CACHE", 1, null, "0 days");
+        jdbc.update(insert, "SUCCESS", "CACHE", 100, 0, "40 days");
+
+        var days = getJson("/api/v1/admin/matrix-runs/daily");
+
+        assertThat(days.size()).isEqualTo(1);
+        var today = days.get(0);
+        assertThat(today.get("runs").asLong()).isEqualTo(5);
+        assertThat(today.get("failures").asLong()).isEqualTo(1);
+        assertThat(today.get("medianMs").asLong()).isEqualTo(200);
+        assertThat(today.get("p95Ms").asLong()).isEqualTo(290);
+        assertThat(today.get("unreachable").asLong()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("계산 기록은 최근 것부터 한 줄씩 나오고 limit 만큼만 준다")
+    void matrixRunsAreListedNewestFirst() throws Exception {
+        jdbc.update("DELETE FROM matrix_run");  // 트랜잭션이라 끝나면 되돌아간다
+        String insert = "INSERT INTO matrix_run (room_id, status, graph_source, snap_ms, search_ms, elapsed_ms) "
+                + "VALUES (gen_random_uuid(), ?, ?, ?, ?, ?)";
+        jdbc.update(insert, "SUCCESS", "DB", 57L, 80L, 1912L);
+        jdbc.update(insert, "SUCCESS", "CACHE", 3L, 66L, 73L);
+        jdbc.update(insert, "ERROR", null, null, null, 12L);
+
+        var runs = getJson("/api/v1/admin/matrix-runs?limit=2");
+
+        assertThat(runs.size()).isEqualTo(2);
+        assertThat(runs.get(0).get("status").asString()).isEqualTo("ERROR");
+        assertThat(runs.get(0).get("snapMs").isNull()).isTrue();
+        assertThat(runs.get(1).get("graphSource").asString()).isEqualTo("CACHE");
+        assertThat(runs.get(1).get("elapsedMs").asLong()).isEqualTo(73);
+        assertThat(runs.get(1).get("roomId").asString()).hasSize(36);
+    }
+
+    @Test
+    @DisplayName("계산 기록 목록도 관리자만 보고 limit 범위를 벗어나면 400")
+    void matrixRunsAreGuarded() throws Exception {
+        mvc.perform(get("/api/v1/admin/matrix-runs")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/v1/admin/matrix-runs").session(user)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/v1/admin/matrix-runs").param("limit", "0").session(admin))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("계산 기록의 days 범위를 벗어나면 400")
+    void matrixDailyRejectsBadDays() throws Exception {
+        mvc.perform(get("/api/v1/admin/matrix-runs/daily").param("days", "0").session(admin))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/admin/matrix-runs/daily").param("days", "32").session(admin))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     @DisplayName("설정에 적힌 관리자는 대소문자와 상관없이 열린다")
     void adminIs200() throws Exception {
         mvc.perform(get("/api/v1/admin/ingest-runs").session(admin)).andExpect(status().isOk());

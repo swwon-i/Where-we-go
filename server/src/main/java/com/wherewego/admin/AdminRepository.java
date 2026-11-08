@@ -218,6 +218,88 @@ public class AdminRepository {
         return List.copyOf(out);
     }
 
+    // ── 행렬 계산 ──────────────────────────────────────────────────────────
+
+    /**
+     * 하루치 행렬 계산 집계. 출발지나 후보가 없어 계산을 시작하지 못한 요청은 세지 않는다.
+     *
+     * @param runs 실제로 계산을 시도한 횟수. 시간대를 바꿔 다시 계산한 것도 한 번이다
+     * @param failures 서버 오류로 끝난 횟수
+     * @param medianMs 성공한 계산의 중앙값. 재시작 뒤 그래프를 읽느라 느렸던 계산은 뺀다
+     * @param p95Ms 같은 기준의 95 백분위
+     * @param unreachable 경로를 찾지 못한 칸 수의 합
+     */
+    public record MatrixDaily(
+            LocalDate day, long runs, long failures, Long medianMs, Long p95Ms, long unreachable) {}
+
+    public List<MatrixDaily> matrixDaily(int days) {
+        var sql = """
+                WITH runs AS (
+                    SELECT (created_at AT TIME ZONE 'Asia/Seoul')::date AS day,
+                           status, elapsed_ms, unreachable,
+                           status = 'SUCCESS' AND graph_source = 'CACHE' AS timed
+                    FROM matrix_run
+                    WHERE status <> 'NOT_COMPUTABLE'
+                      AND created_at >= ((now() AT TIME ZONE 'Asia/Seoul')::date - (:days - 1))::timestamp
+                                        AT TIME ZONE 'Asia/Seoul'
+                )
+                SELECT day,
+                       count(*) AS runs,
+                       count(*) FILTER (WHERE status = 'ERROR') AS failures,
+                       round(percentile_cont(0.5) WITHIN GROUP (ORDER BY elapsed_ms)
+                             FILTER (WHERE timed))::bigint AS median_ms,
+                       round(percentile_cont(0.95) WITHIN GROUP (ORDER BY elapsed_ms)
+                             FILTER (WHERE timed))::bigint AS p95_ms,
+                       coalesce(sum(unreachable), 0) AS unreachable
+                FROM runs
+                GROUP BY day
+                ORDER BY day DESC
+                """;
+        return jdbc.query(sql, new MapSqlParameterSource("days", days),
+                (rs, i) -> new MatrixDaily(
+                        rs.getObject("day", LocalDate.class),
+                        rs.getLong("runs"),
+                        rs.getLong("failures"),
+                        rs.getObject("median_ms", Long.class),
+                        rs.getObject("p95_ms", Long.class),
+                        rs.getLong("unreachable")));
+    }
+
+    /**
+     * 행렬 계산 한 번. 실패한 계산은 도달하지 못한 단계의 시간이 null 이다.
+     *
+     * @param graphSource {@code DB} 면 재시작 뒤 첫 계산이라 그래프를 읽는 시간이 포함되어 있다
+     */
+    public record MatrixRun(
+            long id,
+            java.util.UUID roomId,
+            String status,
+            String graphSource,
+            Long snapMs,
+            Long searchMs,
+            long elapsedMs,
+            OffsetDateTime createdAt) {}
+
+    public List<MatrixRun> matrixRuns(int limit) {
+        return jdbc.query(
+                """
+                SELECT id, room_id, status, graph_source, snap_ms, search_ms, elapsed_ms, created_at
+                FROM matrix_run
+                ORDER BY id DESC
+                LIMIT :limit
+                """,
+                new MapSqlParameterSource("limit", limit),
+                (rs, i) -> new MatrixRun(
+                        rs.getLong("id"),
+                        rs.getObject("room_id", java.util.UUID.class),
+                        rs.getString("status"),
+                        rs.getString("graph_source"),
+                        rs.getObject("snap_ms", Long.class),
+                        rs.getObject("search_ms", Long.class),
+                        rs.getLong("elapsed_ms"),
+                        rs.getObject("created_at", OffsetDateTime.class)));
+    }
+
     // ── 공통 ──────────────────────────────────────────────────────────────
 
     private static Integer integer(ResultSet rs, String column) throws SQLException {

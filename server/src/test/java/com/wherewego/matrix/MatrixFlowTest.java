@@ -2,6 +2,7 @@ package com.wherewego.matrix;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -19,6 +20,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -50,6 +52,8 @@ class MatrixFlowTest {
     }
 
     @Autowired MockMvc mvc;
+    @Autowired JdbcTemplate jdbc;
+    @Autowired MatrixRunRecorder recorder;
 
     private final JsonMapper json = JsonMapper.builder().build();
 
@@ -279,6 +283,150 @@ class MatrixFlowTest {
             mvc.perform(body(post("/api/v1/rooms/" + roomId + "/matrix"), owner,
                             "{\"departureHour\":25}"))
                     .andExpect(status().isBadRequest());
+        }
+    }
+
+    // ── 계산 기록 ───────────────────────────────────────────────────────────
+
+    @Nested
+    class Recording {
+
+        private int rowsOfThisRoom() {
+            return jdbc.queryForObject(
+                    "SELECT count(*) FROM matrix_run WHERE room_id = ?::uuid", Integer.class, roomId);
+        }
+
+        @Test
+        @DisplayName("성공한 계산은 규모와 시간을 한 줄로 남긴다")
+        void successIsRecorded() throws Exception {
+            addThreeBookmarks();
+            matrix(null);
+
+            var run = jdbc.queryForMap("SELECT * FROM matrix_run WHERE room_id = ?::uuid", java.util.UUID.fromString(roomId));
+            assertThat(run.get("status")).isEqualTo("SUCCESS");
+            assertThat(run.get("origin_count")).isEqualTo(2);
+            assertThat(run.get("dest_count")).isEqualTo(3);
+            assertThat((Integer) run.get("settled_nodes")).isPositive();
+            assertThat(run.get("unreachable")).isEqualTo(0);
+            assertThat(run.get("graph_source")).isIn("CACHE", "DB");
+            assertThat((Long) run.get("search_ms")).isNotNegative();
+            assertThat((Long) run.get("snap_ms")).isNotNegative();
+        }
+
+        @Test
+        @DisplayName("다시 계산하면 줄이 하나 더 쌓인다")
+        void everyComputeAddsARow() throws Exception {
+            addThreeBookmarks();
+            matrix(8);
+            matrix(23);
+            assertThat(rowsOfThisRoom()).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("후보가 없어 계산을 못 했으면 NOT_COMPUTABLE 로 남는다")
+        void notComputableIsRecorded() throws Exception {
+            mvc.perform(body(post("/api/v1/rooms/" + roomId + "/matrix"), owner, "{}"))
+                    .andExpect(status().isUnprocessableContent());
+
+            assertThat(jdbc.queryForObject(
+                            "SELECT status FROM matrix_run WHERE room_id = ?::uuid", String.class, roomId))
+                    .isEqualTo("NOT_COMPUTABLE");
+        }
+
+        @Test
+        @DisplayName("참가자가 아닌 호출은 남지 않는다 — 기록이 공격 수단이 되면 안 된다")
+        void nonMemberLeavesNoRow() throws Exception {
+            var stranger = signUp("기록구경꾼", "matrix_run_stranger");
+            addThreeBookmarks();
+
+            mvc.perform(body(post("/api/v1/rooms/" + roomId + "/matrix"), stranger, "{}"))
+                    .andExpect(status().isForbidden());
+
+            assertThat(rowsOfThisRoom()).isZero();
+        }
+
+        @Test
+        @DisplayName("30일이 지난 기록만 지운다")
+        void deletesOnlyExpiredRows() {
+            String insert = "INSERT INTO matrix_run (room_id, status, elapsed_ms, created_at) "
+                    + "VALUES (?::uuid, 'SUCCESS', 1, now() - ?::interval)";
+            jdbc.update(insert, roomId, "31 days");
+            jdbc.update(insert, roomId, "29 days");
+
+            recorder.deleteExpired();
+
+            assertThat(rowsOfThisRoom()).isEqualTo(1);
+        }
+    }
+
+    // ── 방의 마지막 활동 ─────────────────────────────────────────────────────
+
+    /** 테스트는 트랜잭션 안이라 now() 가 멈춰 있다. 먼 과거로 돌려 두고 바뀌었는지 본다. */
+    @Nested
+    class RoomActivity {
+
+        @BeforeEach
+        void markOld() {
+            jdbc.update("UPDATE room SET last_activity_at = '2000-01-01' WHERE id = ?::uuid", roomId);
+        }
+
+        private boolean touched() {
+            return jdbc.queryForObject(
+                    "SELECT last_activity_at > '2001-01-01' FROM room WHERE id = ?::uuid", Boolean.class, roomId);
+        }
+
+        @Test
+        @DisplayName("출발지를 정하면 갱신된다")
+        void originTouches() throws Exception {
+            setOrigin(guest, "{\"station\":\"잠실\"}");
+            assertThat(touched()).isTrue();
+        }
+
+        @Test
+        @DisplayName("북마크를 담으면 갱신된다")
+        void addingBookmarkTouches() throws Exception {
+            addBookmark("시청 근처", 126.9779, 37.5663);
+            assertThat(touched()).isTrue();
+        }
+
+        @Test
+        @DisplayName("북마크를 지워도 갱신된다")
+        void removingBookmarkTouches() throws Exception {
+            addBookmark("시청 근처", 126.9779, 37.5663);
+            long id = jdbc.queryForObject("SELECT id FROM bookmark WHERE room_id = ?::uuid", Long.class, roomId);
+            markOld();
+
+            mvc.perform(delete("/api/v1/rooms/" + roomId + "/bookmarks/" + id).session(owner).with(csrf()))
+                    .andExpect(status().is2xxSuccessful());
+
+            assertThat(touched()).isTrue();
+        }
+
+        @Test
+        @DisplayName("처음 들어오면 갱신된다")
+        void firstJoinTouches() throws Exception {
+            join(signUp("새손님", "matrix_new_guest"));
+            assertThat(touched()).isTrue();
+        }
+
+        @Test
+        @DisplayName("재입장은 갱신하지 않는다 — 바뀐 것이 없다")
+        void rejoinDoesNotTouch() throws Exception {
+            join(guest);
+            assertThat(touched()).isFalse();
+        }
+
+        @Test
+        @DisplayName("계산 중 재스냅은 갱신하지 않는다 — 시스템이 한 일이다")
+        void resnapDoesNotTouch() throws Exception {
+            addThreeBookmarks();
+            markOld();
+            jdbc.update("UPDATE room_member SET origin_build_id = -1 WHERE room_id = ?::uuid", roomId);
+
+            var m = matrix(null);
+
+            assertThat(m.get("origins").get(0).get("resnapped").asBoolean()).isTrue();
+            assertThat(touched()).isFalse();
         }
     }
 

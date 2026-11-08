@@ -18,11 +18,12 @@ import org.springframework.web.bind.annotation.RestController;
  *   GET /api/v1/admin/validation-summary   검수 규칙별 건수
  *   GET /api/v1/admin/validation-results   검수에 걸린 레코드 (쪽 나눔)
  *   GET /api/v1/admin/graph-stats          그래프 빌드와 수단별 규모
+ *   GET /api/v1/admin/matrix-runs          행렬 계산 기록 (최근 것부터)
+ *   GET /api/v1/admin/matrix-runs/daily    행렬 계산의 일별 집계
  * </pre>
  *
- * <p><b>읽기 전용이고 로그인이 필요 없다.</b> 담기는 것이 공개 데이터(인허가 정보)와 파이프라인
- * 통계뿐이라 가릴 것이 없고, 심사자가 클론해서 바로 열어 볼 수 있어야 한다 — 이 화면이
- * "파이프라인이 매일 돌고 있다"는 증거다. 쓰기는 하나도 두지 않는다.
+ * <p><b>읽기 전용이고 관리자만 본다</b>({@code WWG_ADMIN_LOGIN_IDS}, SecurityConfig).
+ * 쓰기는 하나도 두지 않는다.
  */
 @RestController
 @RequestMapping("/api/v1/admin")
@@ -30,6 +31,7 @@ public class AdminController {
 
     private static final Set<String> SEVERITIES = Set.of("ERROR", "WARN");
     private static final int MAX_RUNS = 500;
+    private static final int MAX_MATRIX_DAYS = 31;
 
     private final AdminRepository repository;
 
@@ -92,6 +94,23 @@ public class AdminController {
         var active = builds.stream().filter(AdminRepository.GraphBuild::active).findFirst().orElse(null);
         var counts = active == null ? List.<AdminRepository.ModeCount>of() : active.counts();
         return new GraphStats(active, counts, builds);
+    }
+
+    @GetMapping("/matrix-runs")
+    public List<AdminRepository.MatrixRun> matrixRuns(@RequestParam(defaultValue = "20") int limit) {
+        if (limit < 1 || limit > MAX_RUNS) {
+            throw new IllegalArgumentException("limit 은 1~" + MAX_RUNS + " 입니다: " + limit);
+        }
+        return repository.matrixRuns(limit);
+    }
+
+    /** @param days 오늘을 포함해 며칠 전까지. 기록은 30일만 보관한다 */
+    @GetMapping("/matrix-runs/daily")
+    public List<AdminRepository.MatrixDaily> matrixRunsDaily(@RequestParam(defaultValue = "30") int days) {
+        if (days < 1 || days > MAX_MATRIX_DAYS) {
+            throw new IllegalArgumentException("days 는 1~" + MAX_MATRIX_DAYS + " 입니다: " + days);
+        }
+        return repository.matrixDaily(days);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

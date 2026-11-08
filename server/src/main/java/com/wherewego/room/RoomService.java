@@ -78,8 +78,15 @@ public class RoomService {
         var room = (code == null ? Optional.<RoomRepository.RoomRow>empty() : repository.findByCode(code))
                 .orElseThrow(() -> new NotFoundException("그런 초대 코드가 없습니다"));
 
-        repository.join(room.id(), accounts.currentUser().id());
+        enter(room.id());
         return room.id();
+    }
+
+    /** 처음 들어올 때만 활동이다. 재입장은 아무것도 바꾸지 않는다. */
+    private void enter(UUID roomId) {
+        if (repository.join(roomId, accounts.currentUser().id()) > 0) {
+            repository.touchActivity(roomId);
+        }
     }
 
     /**
@@ -116,7 +123,7 @@ public class RoomService {
     @Transactional
     public void join(UUID roomId) {
         repository.findRoom(roomId).orElseThrow(() -> new NotFoundException("없는 방입니다"));
-        repository.join(roomId, accounts.currentUser().id());
+        enter(roomId);
     }
 
     /** 내가 참가한 방 목록. */
@@ -174,6 +181,7 @@ public class RoomService {
 
         repository.setOrigin(
                 memberId, label, lng, lat, nodeDbId, snapped.snapDistanceM(), graph.buildId());
+        repository.touchActivity(roomId);
 
         return new OriginResult(
                 memberId, label, lng, lat, nodeDbId, snapped.snapDistanceM(), graph.buildId());
@@ -213,15 +221,19 @@ public class RoomService {
         var poi = repository
                 .poiSnapshot(poiId)
                 .orElseThrow(() -> new NotFoundException("없는 장소입니다: " + poiId));
-        return repository.addBookmark(
+        long bookmarkId = repository.addBookmark(
                 roomId, me, poiId, poi.name(), poi.address(), poi.lng(), poi.lat());
+        repository.touchActivity(roomId);
+        return bookmarkId;
     }
 
     /** 지도를 찍어 직접 넣는다. 우리 POI 에 없는 곳도 후보가 될 수 있어야 한다. */
     @Transactional
     public long addBookmarkAtPoint(UUID roomId, String name, double lng, double lat) {
         var me = requireMember(roomId);
-        return repository.addBookmark(roomId, me, null, name.strip(), null, lng, lat);
+        long bookmarkId = repository.addBookmark(roomId, me, null, name.strip(), null, lng, lat);
+        repository.touchActivity(roomId);
+        return bookmarkId;
     }
 
     @Transactional
@@ -234,6 +246,7 @@ public class RoomService {
             }
             throw new NotFoundException("없는 북마크입니다");
         }
+        repository.touchActivity(roomId);
     }
 
     private long requireMember(UUID roomId) {

@@ -87,6 +87,13 @@ public class RoomRepository {
                 new MapSqlParameterSource().addValue("id", roomId).addValue("code", inviteCode));
     }
 
+    /** 사람이 방에서 무언가를 했다. 재스냅 같은 시스템 작업에서는 부르지 않는다. */
+    void touchActivity(UUID roomId) {
+        jdbc.update(
+                "UPDATE room SET last_activity_at = now() WHERE id = :id",
+                new MapSqlParameterSource("id", roomId));
+    }
+
     /** 내가 참가한 방들. 최근 만든 것부터. */
     List<RoomRow> roomsOf(long userId) {
         return jdbc.query(
@@ -101,9 +108,13 @@ public class RoomRepository {
 
     // ── 참가자 ──────────────────────────────────────────────────────────────
 
-    /** 이미 들어가 있으면 아무 일도 하지 않는다. 재입장이 오류일 이유가 없다. */
-    void join(UUID roomId, long userId) {
-        jdbc.update(
+    /**
+     * 이미 들어가 있으면 아무 일도 하지 않는다. 재입장이 오류일 이유가 없다.
+     *
+     * @return 새로 들어갔으면 1, 이미 있었으면 0
+     */
+    int join(UUID roomId, long userId) {
+        return jdbc.update(
                 """
                 INSERT INTO room_member (room_id, user_id) VALUES (:room, :uid)
                 ON CONFLICT (room_id, user_id) DO NOTHING

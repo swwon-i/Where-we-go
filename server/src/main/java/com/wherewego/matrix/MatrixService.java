@@ -45,6 +45,7 @@ public class MatrixService {
     private final AccountService accounts;
     private final GraphCache graphs;
     private final RouteService routes;
+    private final MatrixRunRecorder recorder;
 
     /** 지금 계산 중인 방. 같은 방이 겹쳐 들어오면 429 로 돌려보낸다. */
     private final Map<UUID, Boolean> running = new ConcurrentHashMap<>();
@@ -53,11 +54,13 @@ public class MatrixService {
             RoomRepository rooms,
             AccountService accounts,
             GraphCache graphs,
-            RouteService routes) {
+            RouteService routes,
+            MatrixRunRecorder recorder) {
         this.rooms = rooms;
         this.accounts = accounts;
         this.graphs = graphs;
         this.routes = routes;
+        this.recorder = recorder;
     }
 
     /** 이미 같은 방을 계산하고 있다. */
@@ -95,12 +98,38 @@ public class MatrixService {
             throw new RoomService.NotAMemberException("먼저 방에 들어가야 합니다");
         }
 
+        // 참가자 확인 뒤부터 기록한다. 남의 방을 두드린 요청까지 쌓이면 기록이 공격 수단이 된다.
+        var run = new MatrixRunRecorder.Run(roomId);
+        try {
+            var matrix = calculate(roomId, departureHour, me.id(), startedAt, run);
+            run.status = "SUCCESS";
+            return matrix;
+        } catch (NotComputableException e) {
+            run.status = "NOT_COMPUTABLE";
+            throw e;
+        } finally {
+            run.elapsedMs = millisSince(startedAt);
+            recorder.save(run);
+        }
+    }
+
+    private static long millisSince(long nanoTime) {
+        return (System.nanoTime() - nanoTime) / 1_000_000;
+    }
+
+    private Matrix calculate(
+            UUID roomId, Integer departureHour, long viewerId, long startedAt, MatrixRunRecorder.Run run) {
+
         // 그래프를 이미 들고 있었는지 **읽기 전에** 본다. get() 이 적재해 버리면 구분이 사라진다.
         boolean wasCached = graphs.status().loaded();
         var graph = graphs.get();
+        run.graphSource = wasCached ? "CACHE" : "DB";
+        run.graphBuildId = graph.buildId();
 
         var originRows = rooms.originsOf(roomId);
-        var bookmarks = rooms.bookmarks(roomId, me.id());
+        var bookmarks = rooms.bookmarks(roomId, viewerId);
+        run.originCount = originRows.size();
+        run.destCount = bookmarks.size();
         if (originRows.isEmpty()) {
             throw new NotComputableException("출발지를 정한 사람이 없습니다");
         }
@@ -110,8 +139,11 @@ public class MatrixService {
 
         int hour = departureHour == null ? DEFAULT_HOUR : departureHour;
 
+        long snapStartedAt = System.nanoTime();
         var origins = resolveOrigins(graph, originRows);
         var destinations = resolveDestinations(graph, bookmarks);
+        run.snapMs = millisSince(snapStartedAt);
+        run.resnapped = (int) origins.stream().filter(ResolvedOrigin::resnapped).count();
 
         // 목표를 한 배열로 모은다. 붙이지 못한 후보는 빠지므로 탐색이 더 일찍 끝난다.
         int[] targets = destinations.stream()
@@ -122,6 +154,7 @@ public class MatrixService {
         var rowCells = new ArrayList<List<Matrix.Cell>>();
         for (var ignored : destinations) rowCells.add(new ArrayList<>());
 
+        long searchStartedAt = System.nanoTime();
         int expanded = 0;
         for (var origin : origins) {
             var result = Dijkstra.run(graph, origin.node(), targets, hour);
@@ -131,6 +164,12 @@ public class MatrixService {
                 rowCells.get(d).add(cellFor(graph, result, destinations.get(d)));
             }
         }
+        run.searchMs = millisSince(searchStartedAt);
+        run.settledNodes = expanded;
+        run.unreachable = (int) rowCells.stream()
+                .flatMap(List::stream)
+                .filter(cell -> !cell.reachable())
+                .count();
 
         var rows = new ArrayList<Matrix.Row>(destinations.size());
         for (int d = 0; d < destinations.size(); d++) {
@@ -140,7 +179,7 @@ public class MatrixService {
                     dest.lng(), dest.lat(), dest.snapM(), List.copyOf(rowCells.get(d))));
         }
 
-        long elapsed = (System.nanoTime() - startedAt) / 1_000_000;
+        long elapsed = millisSince(startedAt);
         return new Matrix(
                 graph.buildId(),
                 departureHour,
