@@ -155,8 +155,16 @@ export function matrixPanel(container, roomId, map = {}) {
 
 // ── 그리기 ──────────────────────────────────────────────────────────────────
 
+/** 막대의 기준은 표 전체에서 가장 오래 걸리는 칸이다. 칸끼리 길이를 그대로 비교할 수 있다. */
+function longestSeconds(m) {
+  return Math.max(1, ...m.rows.flatMap((row) =>
+    row.cells.filter((c) => c.reachable).map((c) => c.durationSeconds)));
+}
+
 function table(m) {
+  const longest = longestSeconds(m);
   return `
+    <div class="scroll">
     <table class="matrix">
       <thead>
         <tr>
@@ -172,12 +180,13 @@ function table(m) {
         </tr>
       </thead>
       <tbody>
-        ${m.rows.map((row) => bodyRow(row, m.origins, fastestIn(row))).join('')}
+        ${m.rows.map((row) => bodyRow(row, m.origins, fastestIn(row), longest)).join('')}
       </tbody>
     </table>
+    </div>
     <p class="hint">
-      칸을 누르면 그 경로의 구간이 펼쳐집니다.
-      <b>순위를 매기지 않습니다</b> — 가장 빠른 칸에 표시만 해 둡니다.
+      막대가 길수록 오래 걸립니다. 칸을 누르면 경로가 펼쳐집니다.
+      파란 숫자는 그 장소에 가장 빨리 도착하는 사람입니다.
     </p>
   `;
 }
@@ -195,18 +204,18 @@ function fastestIn(row) {
   return best;
 }
 
-function bodyRow(row, origins, fastest) {
+function bodyRow(row, origins, fastest, longest) {
   return `
     <tr>
       <th class="place">
         ${esc(row.name)}
         <div class="meta">${esc(row.address ?? '')}</div>
       </th>
-      ${row.cells.map((cell, i) => cellCell(row, cell, origins[i], i, i === fastest)).join('')}
+      ${row.cells.map((cell, i) => cellCell(row, cell, origins[i], i, i === fastest, longest)).join('')}
     </tr>`;
 }
 
-function cellCell(row, cell, origin, index, isFastest) {
+function cellCell(row, cell, origin, index, isFastest, longest) {
   if (!cell.reachable) {
     const why = cell.reason === 'NO_WALK_NETWORK' ? '보행망 밖' : '도달 불가';
     return `<td class="cell bad">${why}</td>`;
@@ -217,6 +226,7 @@ function cellCell(row, cell, origin, index, isFastest) {
         data-member="${origin.memberId}"
         title="누르면 경로가 펼쳐집니다">
       <b>${minutes(cell.durationSeconds)}</b>
+      <span class="time-bar" style="width:${(cell.durationSeconds / longest) * 100}%" aria-hidden="true"></span>
       <div class="meta">
         환승 ${cell.transfers} · 도보 ${Math.round(cell.walkDistanceM)}m
       </div>

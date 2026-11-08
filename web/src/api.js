@@ -133,11 +133,13 @@ export const api = {
   clientConfig: () => request('GET', '/client-config'),
 
   // 파이프라인 운영 기록 — 관리자만 (WWG_ADMIN_LOGIN_IDS). 아니면 401/403
-  adminIngestRuns: () => request('GET', '/admin/ingest-runs'),
+  adminIngestRuns: (limit) => request('GET', `/admin/ingest-runs?limit=${limit}`),
   adminValidationSummary: () => request('GET', '/admin/validation-summary'),
   adminValidationResults: (params) =>
     request('GET', `/admin/validation-results?${new URLSearchParams(params)}`),
   adminGraphStats: () => request('GET', '/admin/graph-stats'),
+  adminMatrixDaily: () => request('GET', '/admin/matrix-runs/daily'),
+  adminMatrixRuns: (limit) => request('GET', `/admin/matrix-runs?limit=${limit}`),
 };
 
 /** 로그아웃하면 토큰도 버린다. 세션이 바뀌면 토큰도 무효다. */

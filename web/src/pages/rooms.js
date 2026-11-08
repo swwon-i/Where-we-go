@@ -12,19 +12,24 @@ import {
 export async function roomsPage() {
   render(`
     <div class="page">
-      <div class="two-up">
-        <section class="panel">
-          <h2>방 만들기</h2>
+      <section>
+        <h1>내 방</h1>
+        <div id="room-list">${notice('불러오는 중…')}</div>
+      </section>
+
+      <div class="page-side">
+        <section>
+          <h2>새 모임 만들기</h2>
           <form id="new-room" class="form row-form">
             <em class="form-error" hidden></em>
             <input id="title" type="text" placeholder="예: 금요일 저녁 모임" maxlength="50" autofocus>
             <em class="field-error" data-for="title" hidden></em>
             <button class="primary" type="submit">만들기</button>
           </form>
-          <p class="hint">만들면 바로 들어가 있습니다. 초대 코드가 같이 나와요.</p>
+          <p class="hint">만들면 바로 들어가고, 친구에게 보낼 초대 코드가 나옵니다.</p>
         </section>
 
-        <section class="panel">
+        <section>
           <h2>초대 코드로 참가</h2>
           <form id="join-room" class="row-form">
             <input id="code" type="text" class="code-input" placeholder="XXXX-XXXX"
@@ -35,11 +40,6 @@ export async function roomsPage() {
           <p class="hint">대소문자와 하이픈은 가리지 않습니다. 링크를 받았다면 그냥 눌러도 됩니다.</p>
         </section>
       </div>
-
-      <section class="panel">
-        <h2>내 방</h2>
-        <div id="room-list">${notice('불러오는 중…')}</div>
-      </section>
     </div>
   `);
 
@@ -101,12 +101,10 @@ async function paintList() {
       ? rooms.map((r) => `
           <a class="room-row" href="#/rooms/${r.roomId}">
             <b>${esc(r.title)}</b>
-            <span class="meta">
-              ${esc(r.ownerNickname)} · ${ago(r.createdAt)}
-              <code class="code-chip">${esc(formatCode(r.inviteCode))}</code>
-            </span>
+            <span class="meta">${esc(r.ownerNickname)}의 방, ${ago(r.createdAt)} 만듦</span>
+            <code class="code-chip">${esc(formatCode(r.inviteCode))}</code>
           </a>`).join('')
-      : notice('아직 방이 없습니다. 위에서 하나 만들거나 초대 코드로 들어가 보세요.');
+      : notice('아직 방이 없습니다. 새 모임을 만들거나 받은 초대 코드를 입력하세요.');
   } catch {
     box.innerHTML = notice('목록을 불러오지 못했습니다.', 'bad');
   }

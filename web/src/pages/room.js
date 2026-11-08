@@ -11,8 +11,8 @@ import { loadKakao, MapUnavailable, mapNotice, createMap } from '../kakao.js';
 import { matrixPanel, resetMatrix } from './matrix.js';
 
 /** 출발지와 후보를 색으로 가른다. */
-const ORIGIN_COLOR = '#2563eb';
-const BOOKMARK_COLOR = '#e11d48';
+const ORIGIN_COLOR = '#1e3a8a';
+const BOOKMARK_COLOR = '#b25a6e';
 /** 장소 찾기 결과. 아직 후보가 아니라는 뜻으로 가라앉은 색을 쓴다. */
 const FOUND_COLOR = '#64748b';
 
@@ -104,7 +104,7 @@ function paintShell() {
         <button id="share" class="link">링크 복사</button>
         ${state.iAmOwner ? '<button id="regen" class="link">코드 재발급</button>' : ''}
         <span id="share-done" class="ok" hidden>복사했습니다</span>
-        <span id="matrix-state" class="badge"></span>
+        <span id="matrix-state" class="state-pill"></span>
       </div>
 
       <div class="room-body">
@@ -407,7 +407,7 @@ function paintPanels() {
   paintMarkers();
 
   const badge = $('#matrix-state');
-  badge.textContent = state.matrixReady ? '행렬 계산 가능' : '출발지와 후보가 각각 하나 이상 필요';
+  badge.textContent = state.matrixReady ? '이동시간을 비교할 수 있습니다' : '출발지와 후보를 하나씩 정하면 비교할 수 있습니다';
   badge.classList.toggle('ready', state.matrixReady);
 }
 

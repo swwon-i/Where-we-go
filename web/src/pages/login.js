@@ -8,6 +8,7 @@
 import { api, ApiError, forgetCsrf } from '../api.js';
 import { render, $, busy, showError, showFieldErrors, notice } from '../dom.js';
 import { go } from '../router.js';
+import { loadKakao } from '../kakao.js';
 import { setCurrentUser } from '../session.js';
 
 /** 로그인 뒤 돌아갈 곳. 방 링크를 받고 들어온 사람을 그 방으로 보내기 위한 것이다. */
@@ -34,12 +35,48 @@ const field = (id, label, type, { name = id, extra = '', hint = '' } = {}) => `
     <em class="field-error" data-for="${name}" hidden></em>
   </label>`;
 
+/** 한강이 가운데 오도록 잡은 서울 중심. 축척 9면 서울 전체가 한 화면에 들어온다. */
+const SEOUL_CENTER = { lat: 37.54, lng: 126.99 };
+const SEOUL_LEVEL = 9;
+
+/**
+ * 왼쪽 아래의 실제 서울 지도. 움직일 필요가 없으므로 이미지 지도로 그린다.
+ * 키가 없거나 SDK 가 안 뜨면 조용히 뺀다 — 장식 때문에 로그인 화면에 안내문을 띄울 이유가 없다.
+ */
+async function paintBackdropMap() {
+  try {
+    const kakao = await loadKakao();
+    const container = $('.welcome-map');
+    if (!container) return;  // 기다리는 사이 화면을 떠났다
+    new kakao.maps.StaticMap(container, {
+      center: new kakao.maps.LatLng(SEOUL_CENTER.lat, SEOUL_CENTER.lng),
+      level: SEOUL_LEVEL,
+      marker: false,
+    });
+  } catch {
+    $('.welcome-map')?.remove();
+  }
+}
+
+function welcomeSign() {
+  return `
+    <section class="welcome-sign">
+      <div class="welcome-map"></div>
+      <p class="welcome-brand">Where-We-Go!</p>
+      <h1>모임 장소, 같이 정해요</h1>
+      <ol class="steps">
+        <li>방을 만들고 친구를 초대해요</li>
+        <li>각자 출발지와 후보를 정해요</li>
+        <li>누가 얼마나 걸리는지 비교해요</li>
+      </ol>
+    </section>`;
+}
+
 export async function loginPage() {
   render(`
-    <div class="center-card">
-      <h2>Where-We-Go!</h2>
-      <p class="sub">각자 어디서 출발하든, 얼마나 걸리는지 나란히 놓고 본다.</p>
-
+    <div class="welcome">
+      ${welcomeSign()}
+      <div class="welcome-form">
       <div class="tabs" role="tablist">
         <button class="tab is-on" data-tab="login">로그인</button>
         <button class="tab" data-tab="signup">회원가입</button>
@@ -87,8 +124,11 @@ export async function loginPage() {
       <p class="foot">
         <a href="#/explore">계정 없이 장소만 둘러보기</a>
       </p>
+      </div>
     </div>
   `);
+
+  paintBackdropMap();
 
   const loginForm = $('#login-form');
   const signupForm = $('#signup-form');

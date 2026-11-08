@@ -38,12 +38,38 @@ const MODES = ['SUBWAY', 'BUS', 'WALK'];
 const MODE_LABEL = { SUBWAY: '지하철', BUS: '버스', WALK: '보행망' };
 
 const PAGE_SIZE = 50;
+const RUNS_STEP = 20;
+const RUNS_MAX = 500;  // 서버의 limit 상한
 
 /** 펼쳐 둔 검수 결과. 다른 규칙을 누르면 바뀐다. */
 let drill = null;
+/** 적재 회차를 몇 줄까지 불러올지. "더 보기"로 늘어난다. */
+let runLimit = RUNS_STEP;
+/** 계산 기록을 몇 줄까지 불러올지. */
+let matrixLimit = RUNS_STEP;
+
+/** 접어 두는 구역. 접힌 줄의 요약은 데이터를 받은 뒤 summarize 가 채운다. */
+function panel(id, title) {
+  return `
+    <details class="fold" id="${id}-panel">
+      <summary>
+        <h2>${title}</h2>
+        <span class="meta fold-sum" id="${id}-sum">불러오는 중…</span>
+      </summary>
+      <div class="fold-body" id="${id}">${notice('불러오는 중…')}</div>
+    </details>`;
+}
+
+/** @param open 지금 사람이 봐야 하는 문제가 있으면 펼친다 */
+function summarize(id, text, open = false) {
+  $(`#${id}-sum`).textContent = text;
+  if (open) $(`#${id}-panel`).open = true;
+}
 
 export async function adminPage() {
   drill = null;
+  runLimit = RUNS_STEP;
+  matrixLimit = RUNS_STEP;
   render(`
     <div class="admin">
       <div class="admin-head">
@@ -55,38 +81,39 @@ export async function adminPage() {
         <div id="totals" class="totals"></div>
       </div>
 
-      <section>
-        <h2>적재 회차</h2>
-        <div id="runs">${notice('불러오는 중…')}</div>
-      </section>
-
-      <section>
-        <h2>검수 <span class="meta">원천마다 검수 결과가 있는 가장 최근 회차</span></h2>
-        <div id="rules">${notice('불러오는 중…')}</div>
-      </section>
-
-      <section>
-        <h2>경로 그래프</h2>
-        <div id="graph">${notice('불러오는 중…')}</div>
-      </section>
+      ${panel('runs', '적재 회차')}
+      ${panel('rules', '검수')}
+      ${panel('graph', '경로 그래프')}
+      ${panel('matrix', '계산 기록')}
     </div>
   `);
 
-  await Promise.all([loadRuns(), loadRules(), loadGraph()]);
+  await Promise.all([loadRuns(), loadRules(), loadGraph(), loadMatrixRuns()]);
 }
 
 // ── 적재 회차 ──────────────────────────────────────────────────────────────
 
 async function loadRuns() {
   try {
-    const { runs, totals } = await api.adminIngestRuns();
+    const { runs, totals } = await api.adminIngestRuns(runLimit);
     $('#totals').innerHTML = `
       <span><b>${num(totals.ACTIVE)}</b> 영업 중</span>
-      <span><b>${num(totals.CLOSED)}</b> 폐업</span>
-      <span><b>${runs.length}</b> 회차</span>`;
+      <span><b>${num(totals.CLOSED)}</b> 폐업</span>`;
     $('#runs').innerHTML = runs.length ? runsTable(runs) : notice('아직 적재한 회차가 없습니다.');
+    $('#more-runs')?.addEventListener('click', () => {
+      runLimit = Math.min(runLimit + RUNS_STEP, RUNS_MAX);
+      loadRuns();
+    });
+
+    const failures = runs.slice(0, 10).filter((r) => r.status === 'FAILED').length;
+    summarize(
+      'runs',
+      runs.length ? `최근 실행 ${when(runs[0].startedAt)} · 최근 10회차 실패 ${failures}건` : '회차 없음',
+      failures > 0,
+    );
   } catch (e) {
     $('#runs').innerHTML = failed(e);
+    summarize('runs', '불러오지 못했습니다', true);
   }
 }
 
@@ -127,7 +154,8 @@ function runsTable(runs) {
     </div>
     <p class="hint">
       <b>SKIPPED</b> 는 원본 파일이 직전 회차와 같아(해시 비교) 적재를 건너뛴 회차다. 실패가 아니다.
-    </p>`;
+    </p>
+    ${runs.length === runLimit && runLimit < RUNS_MAX ? '<button id="more-runs" class="more">더 보기</button>' : ''}`;
 }
 
 // ── 검수 ──────────────────────────────────────────────────────────────────
@@ -137,10 +165,15 @@ async function loadRules() {
     const rows = await api.adminValidationSummary();
     if (!rows.length) {
       $('#rules').innerHTML = notice('검수 결과가 아직 없습니다.');
+      summarize('rules', '결과 없음');
       return;
     }
+    // 검수 ERROR 는 원본 데이터의 품질 문제라 늘 있을 수 있다. 장애가 아니므로 펼치지 않는다.
+    const total = (severity) => rows.filter((r) => r.severity === severity).reduce((s, r) => s + r.count, 0);
+    summarize('rules', `ERROR ${total('ERROR').toLocaleString('ko-KR')}건 · WARN ${total('WARN').toLocaleString('ko-KR')}건`);
+
     const bySource = groupBy(rows, (r) => r.source);
-    $('#rules').innerHTML = Object.entries(bySource).map(([source, list]) => `
+    $('#rules').innerHTML = `<p class="hint rules-note">원천마다 검수 결과가 있는 가장 최근 회차</p>` + Object.entries(bySource).map(([source, list]) => `
       <div class="rule-group">
         <h3>${esc(SOURCES[source] ?? source)} <span class="meta">회차 #${list[0].runId}</span></h3>
         <table class="grid rules">
@@ -170,6 +203,7 @@ async function loadRules() {
     });
   } catch (e) {
     $('#rules').innerHTML = failed(e);
+    summarize('rules', '불러오지 못했습니다', true);
   }
 }
 
@@ -253,8 +287,10 @@ async function loadGraph() {
     const { active, counts } = await api.adminGraphStats();
     if (!active) {
       $('#graph').innerHTML = notice('활성 그래프가 없습니다. <code>python -m etl.build_graph</code> 로 빌드하세요.');
+      summarize('graph', '활성 그래프 없음', true);
       return;
     }
+    summarize('graph', `활성 빌드 #${active.id} · 고립 노드 ${(active.isolatedNodes ?? 0).toLocaleString('ko-KR')}개`);
     $('#graph').innerHTML = `
       <div class="facts">
         <div><span class="meta">활성 빌드</span><b>#${active.id}</b></div>
@@ -270,6 +306,7 @@ async function loadGraph() {
       </div>`;
   } catch (e) {
     $('#graph').innerHTML = failed(e);
+    summarize('graph', '불러오지 못했습니다', true);
   }
 }
 
@@ -295,6 +332,65 @@ function modeTable(title, rows) {
     </table>`;
 }
 
+// ── 계산 기록 ──────────────────────────────────────────────────────────────
+
+/** 기록의 날짜는 서버가 한국 시간으로 묶는다. 비교하는 쪽도 맞춘다. en-CA 는 YYYY-MM-DD 다. */
+const todayInSeoul = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date());
+
+async function loadMatrixRuns() {
+  try {
+    const [days, runs] = await Promise.all([api.adminMatrixDaily(), api.adminMatrixRuns(matrixLimit)]);
+    $('#matrix').innerHTML = runs.length ? matrixTable(runs) : notice('아직 계산 기록이 없습니다.');
+    $('#more-matrix')?.addEventListener('click', () => {
+      matrixLimit = Math.min(matrixLimit + RUNS_STEP, RUNS_MAX);
+      loadMatrixRuns();
+    });
+
+    const today = days.find((d) => d.day === todayInSeoul());
+    summarize(
+      'matrix',
+      today
+        ? `오늘 ${today.runs.toLocaleString('ko-KR')}회 · 실패 ${today.failures}건 · 보통 ${today.medianMs ?? '—'}ms · p95 ${today.p95Ms ?? '—'}ms`
+        : '오늘 계산 없음',
+      (today?.failures ?? 0) > 0,
+    );
+  } catch (e) {
+    $('#matrix').innerHTML = failed(e);
+    summarize('matrix', '불러오지 못했습니다', true);
+  }
+}
+
+function matrixTable(runs) {
+  return `
+    <div class="scroll">
+      <table class="grid">
+        <thead>
+          <tr>
+            <th>시각</th><th>방</th><th>상태</th>
+            <th title="CACHE: 메모리의 그래프 · DB: 재시작 뒤 처음이라 그래프를 읽음">출처</th>
+            <th class="n" title="좌표를 가까운 길에 연결한 시간">snap</th>
+            <th class="n" title="경로를 찾은 시간">search</th>
+            <th class="n" title="요청 처리 전체 시간">전체</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${runs.map((r) => `
+            <tr>
+              <td class="meta">${when(r.createdAt)}</td>
+              <td title="${esc(r.roomId)}"><code>${esc(r.roomId.slice(0, 8))}</code></td>
+              <td>${badge(r.status)}</td>
+              <td>${esc(r.graphSource ?? '—')}</td>
+              <td class="n">${millis(r.snapMs)}</td>
+              <td class="n">${millis(r.searchMs)}</td>
+              <td class="n">${millis(r.elapsedMs)}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    <p class="hint">계산 한 번에 한 줄, 30일 보관. 시간대를 바꿔 다시 계산한 것도 한 줄이다. <b>DB</b> 는 재시작 뒤 첫 계산이라 그래프를 읽는 시간이 전체에 포함되어 있다.</p>
+    ${runs.length === matrixLimit && matrixLimit < RUNS_MAX ? '<button id="more-matrix" class="more">더 보기</button>' : ''}`;
+}
+
 // ── 표시 ──────────────────────────────────────────────────────────────────
 
 const STATUS_CLASS = { SUCCESS: 'ok', SKIPPED: 'skip', FAILED: 'bad', RUNNING: 'run', ERROR: 'bad', WARN: 'warn' };
@@ -302,6 +398,8 @@ const STATUS_CLASS = { SUCCESS: 'ok', SKIPPED: 'skip', FAILED: 'bad', RUNNING: '
 const badge = (s) => `<span class="badge ${STATUS_CLASS[s] ?? ''}">${esc(s)}</span>`;
 
 const num = (n) => (n === null || n === undefined ? '<span class="meta">—</span>' : Number(n).toLocaleString('ko-KR'));
+
+const millis = (ms) => (ms === null || ms === undefined ? '<span class="meta">—</span>' : `${Number(ms).toLocaleString('ko-KR')}ms`);
 
 const pct = (r) => (r === null || r === undefined ? '—' : `${(r * 100).toFixed(1)}%`);
 

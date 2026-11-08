@@ -202,8 +202,8 @@ export function createMap(container, { lat, lng }, level = 5) {
       // 출발·도착
       const first = legs.find((l) => l.path?.length)?.path[0];
       const last = [...legs].reverse().find((l) => l.path?.length)?.path.at(-1);
-      if (first) dot(first, 'end start', '#2563eb', '출발');
-      if (last) dot(last, 'end goal', '#e11d48', '도착');
+      if (first) dot(first, 'end start', '#1e3a8a', '출발');
+      if (last) dot(last, 'end goal', '#b25a6e', '도착');
     },
 
     clearRoute() {
