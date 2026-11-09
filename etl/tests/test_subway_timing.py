@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from etl.subway_timing import (
+    BRANCH_TERMINALS,
     EXPRESS_SUFFIX,
     HEADWAY_MAX_SEC,
     LINE_ALIAS,
@@ -15,9 +16,11 @@ from etl.subway_timing import (
     REFERENCE_SCOPE_STATIONS,
     RUN_MAX_SEC,
     base_line,
+    branch_name,
     check_against_reference,
     headways,
     inter_station_times,
+    is_branch,
     is_express,
     line_key,
     join_station_coords,
@@ -454,3 +457,55 @@ class TestLineKey:
     def test_base_line_round_trips(self):
         assert base_line(line_key("1", "1")) == "1"
         assert base_line("2") == "2"
+
+
+class TestBranchLines:
+    """2호선 지선을 본선에서 떼어낸다.
+
+    떼어내지 않으면 성수의 본선 승강장과 지선 승강장이 한 노드가 되어, 강남에서
+    신설동까지 한 번도 내리지 않고 가는 경로가 생긴다. 실제로는 성수에서 내려
+    지선 열차를 기다려야 하고 그 배차가 본선의 두 배다.
+    """
+
+    def test_main_line_loop_is_not_a_branch(self):
+        """본선 순환은 성수에서 시작해 성수로 돌아온다 — 430편으로 가장 많다."""
+        assert line_key("2", "0", "성수", "성수") == "2"
+        assert not is_branch("2")
+
+    def test_seongsu_branch_from_either_terminal(self):
+        """성수 ↔ 신설동. 어느 쪽에서 출발하든 같은 지선이다."""
+        assert line_key("2", "0", "성수", "신설동") == "2성수지선"
+        assert line_key("2", "0", "신설동", "성수") == "2성수지선"
+        assert is_branch("2성수지선")
+
+    def test_sinjeong_branch(self):
+        """신도림 ↔ 까치산. 도림천이 종착인 열차도 같은 지선이다."""
+        assert line_key("2", "0", "신도림", "까치산") == "2신정지선"
+        assert line_key("2", "0", "까치산", "도림천") == "2신정지선"
+
+    def test_partial_main_line_runs_stay_main(self):
+        """성수 ↔ 신도림은 본선 일부 구간이다. 지선이 아니다."""
+        assert line_key("2", "0", "성수", "신도림") == "2"
+        assert line_key("2", "0", "성수", "홍대입구") == "2"
+
+    def test_base_line_strips_the_branch(self):
+        """역 좌표와 환승 실측값은 본선/지선을 가리지 않는다 — 같은 역의 같은 자리다."""
+        assert base_line("2성수지선") == "2"
+        assert base_line("2신정지선") == "2"
+
+    def test_branch_name_for_display(self):
+        assert branch_name("2성수지선") == "성수지선"
+        assert branch_name("2") is None
+        assert branch_name(f"9{EXPRESS_SUFFIX}") is None
+
+    def test_express_and_branch_do_not_collide(self):
+        """2호선에는 급행이 없고, 급행이 있는 호선에는 이렇게 가를 지선이 없다."""
+        assert line_key("9", "1", "개화", "중앙보훈병원") == f"9{EXPRESS_SUFFIX}"
+        assert not is_branch(f"9{EXPRESS_SUFFIX}")
+        assert not is_express("2성수지선")
+
+    def test_terminals_belong_to_line_two(self):
+        """다른 호선의 같은 이름 역에 걸리지 않게 호선까지 함께 본다."""
+        assert all(line == "2" for line, _ in BRANCH_TERMINALS)
+        # 신설동은 1호선에도 있다. 1호선 열차가 지선이 되면 안 된다.
+        assert line_key("1", "0", "신설동", "인천") == "1"

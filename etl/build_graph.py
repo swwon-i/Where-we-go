@@ -41,8 +41,10 @@ from etl.subway_timing import (
     STATION_MASTER_PATH,
     TIMETABLE_PATH,
     base_line,
+    branch_name,
     headways_by_hour,
     inter_station_times,
+    is_branch,
     is_express,
     join_station_coords,
     load_timetable,
@@ -702,7 +704,14 @@ def insert_transfer_edges(
             for b in lines:
                 if a == b:
                     continue
-                if base_line(a) == base_line(b):
+                if is_branch(a) or is_branch(b):
+                    # 본선 ↔ 지선. 환승 데이터에 없다 — 같은 호선이라 환승으로 재지 않았다.
+                    # 급행값(30초)을 쓰지 않는다. 급행은 같은 층 맞은편이지만 지선은
+                    # 승강장이 따로라 그만큼 쌀 이유가 없다. 근거 없는 값이므로
+                    # 폴백으로 **세어서** graph_build.transfer_fallback_ratio 에 드러낸다.
+                    walk = TRANSFER_FALLBACK_SEC
+                    fallback += 1
+                elif base_line(a) == base_line(b):
                     # 같은 호선의 급행 ↔ 완행. 호선을 바꾸는 것이 아니라 등급만 바꾼다.
                     walk = EXPRESS_TRANSFER_SEC
                 else:
@@ -787,10 +796,15 @@ def aggregate_bus_sections(sec: pd.DataFrame, days: int) -> pd.DataFrame:
 
 
 def _subway_route_name(key: str) -> str:
-    """`9` → `9호선`, `9급행` → `9호선 급행`. 화면에 그대로 나가는 이름이다."""
+    """`9` → `9호선`, `9급행` → `9호선 급행`, `2성수지선` → `2호선 성수지선`.
+
+    화면에 그대로 나가는 이름이다.
+    """
     base = base_line(key)
     name = f"{base}호선" if base.isdigit() else base
-    return f"{name} {EXPRESS_SUFFIX}" if is_express(key) else name
+    if is_express(key):
+        return f"{name} {EXPRESS_SUFFIX}"
+    return f"{name} {branch_name(key)}" if is_branch(key) else name
 
 
 def insert_transit_routes(conn, bus_routes: pd.DataFrame | None, subway_lines) -> int:
@@ -800,7 +814,8 @@ def insert_transit_routes(conn, bus_routes: pd.DataFrame | None, subway_lines) -
     `line` 이 '2' 라 그냥 읽히더라도, 읽는 쪽이 수단마다 다르게 굴면 안 된다.
     """
     rows = [
-        ("SUBWAY", str(l), _subway_route_name(str(l)), EXPRESS_SUFFIX if is_express(l) else None)
+        ("SUBWAY", str(l), _subway_route_name(str(l)),
+         EXPRESS_SUFFIX if is_express(l) else branch_name(l))
         for l in sorted(subway_lines)
     ]
     if bus_routes is not None:

@@ -22,14 +22,23 @@ const FALLBACK = '#64748b';
 export function legColor(leg) {
   if (leg.kind === 'WALK') return WALK_COLOR;
   if (leg.kind === 'SUBWAY' || isSubwayWait(leg)) {
-    const base = String(leg.line ?? '').replace('급행', '');
+    const base = String(leg.line ?? '').replace(LINE_SUFFIX, '');
     return SUBWAY[base] ?? FALLBACK;
   }
   if (/^N\d/.test(leg.label ?? '')) return BUS.심야;
   return BUS[leg.routeType] ?? FALLBACK;
 }
 
-/** 승차·환승 줄은 타려는 노선의 색을 따른다. 지하철 노선 식별자는 '5', '9급행' 처럼 짧다. */
+/**
+ * 그래프가 쓰는 노선 식별자의 꼬리표. 등급(급행)과 지선을 떼면 호선 숫자가 남는다.
+ * 색은 호선의 것이다 — 급행도 지선도 같은 호선 색으로 그린다
+ * (etl/subway_timing.py 의 EXPRESS_SUFFIX · BRANCH_SUFFIXES 와 맞춘다).
+ */
+const LINE_SUFFIX = /(급행|성수지선|신정지선)$/;
+
+/** 승차·환승 줄은 타려는 노선의 색을 따른다. 지하철 식별자는 '5', '9급행', '2성수지선' 이다. */
 function isSubwayWait(leg) {
-  return (leg.kind === 'BOARD' || leg.kind === 'TRANSFER') && /^\d(급행)?$/.test(String(leg.line ?? ''));
+  const line = String(leg.line ?? '');
+  return (leg.kind === 'BOARD' || leg.kind === 'TRANSFER')
+    && /^\d/.test(line) && /^\d$/.test(line.replace(LINE_SUFFIX, ''));
 }

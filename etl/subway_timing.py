@@ -46,6 +46,28 @@ WEEKTAGS = ("DAY", "SAT", "END")
 #: TRANSFER 비용을 물게 된다. 급행을 버리지 않고 제값에 태우는 것이 목적이다.
 EXPRESS_SUFFIX = "급행"
 
+#: 지선을 별도 노선으로 떼어낼 때 붙이는 꼬리표.
+#:
+#: 급행과 같은 이유다. 2호선 본선과 지선은 `LINE` 이 둘 다 '2' 라, 떼어내지 않으면
+#: 성수의 본선 승강장과 지선 승강장이 **한 노드**가 된다. 그러면 강남에서 신설동까지
+#: 한 번도 내리지 않고 가는 경로가 생긴다 — 실제로는 성수에서 내려 지선 열차를
+#: 기다려야 하고, 그 배차가 본선의 두 배다(19시 기준 본선 4분 / 성수지선 8분).
+#:
+#: 떼어내면 승강장이 쪼개져 (1) 지선은 지선 배차로 기다리고 (2) 본선↔지선 전환이
+#: TRANSFER 비용을 물게 된다.
+BRANCH_SUFFIXES = ("성수지선", "신정지선")
+
+#: (호선, 시발 또는 종착역) -> 지선 이름.
+#:
+#: 시각표의 `GUBHANG` 은 2호선에서 전부 '0' 이라 급행처럼 한 칸으로 가릴 수 없다.
+#: 대신 시발·종착역이 갈라 준다 — 용두에 서는 열차는 성수↔신설동 226편뿐이고,
+#: 본선 순환(성수↔성수 430편)과 섞이지 않는다.
+BRANCH_TERMINALS: dict[tuple[str, str], str] = {
+    ("2", "신설동"): "성수지선",
+    ("2", "까치산"): "신정지선",
+    ("2", "도림천"): "신정지선",
+}
+
 #: 역간 구간시간(주행 + 도착역 정차)으로 인정할 범위(초). 이 밖은 회차·주박 등 운행 외 구간이다.
 RUN_MIN_SEC, RUN_MAX_SEC = 1, 1_800
 #: 배차로 인정할 범위(초). 1시간을 넘으면 운행 종료 구간이다.
@@ -139,19 +161,46 @@ def parse_hms(value: object) -> float:
     return h * 3600 + m * 60 + s
 
 
-def line_key(line: object, gubhang: object) -> str:
-    """(호선, 급행구분) → 그래프가 쓸 노선 식별자. 급행이면 `9급행` 처럼 꼬리표가 붙는다."""
-    return f"{line}{EXPRESS_SUFFIX}" if str(gubhang) != "0" else str(line)
+def line_key(
+    line: object, gubhang: object, start: object = None, end: object = None
+) -> str:
+    """(호선, 급행구분, 시발역, 종착역) → 그래프가 쓸 노선 식별자.
+
+    급행이면 `9급행`, 지선이면 `2성수지선` 처럼 꼬리표가 붙는다. 둘은 겹치지 않는다 —
+    2호선에는 급행이 없고, 급행이 있는 1·9호선에는 이렇게 가를 지선이 없다.
+    """
+    if str(gubhang) != "0":
+        return f"{line}{EXPRESS_SUFFIX}"
+    branch = (BRANCH_TERMINALS.get((str(line), str(start)))
+              or BRANCH_TERMINALS.get((str(line), str(end))))
+    return f"{line}{branch}" if branch else str(line)
 
 
 def base_line(key: object) -> str:
-    """`9급행` → `9`. 역 좌표·환승 실측값은 급행/완행을 가리지 않으므로 이 값으로 찾는다."""
+    """`9급행` · `2성수지선` → `9` · `2`.
+
+    역 좌표와 환승 실측값은 급행/완행도 본선/지선도 가리지 않는다. 같은 역의 같은
+    자리이므로 이 값으로 찾는다.
+    """
     text = str(key)
-    return text[: -len(EXPRESS_SUFFIX)] if text.endswith(EXPRESS_SUFFIX) else text
+    for suffix in (EXPRESS_SUFFIX, *BRANCH_SUFFIXES):
+        if text.endswith(suffix):
+            return text[: -len(suffix)]
+    return text
 
 
 def is_express(key: object) -> bool:
     return str(key).endswith(EXPRESS_SUFFIX)
+
+
+def is_branch(key: object) -> bool:
+    return str(key).endswith(BRANCH_SUFFIXES)
+
+
+def branch_name(key: object) -> str | None:
+    """`2성수지선` → `성수지선`. 지선이 아니면 None."""
+    text = str(key)
+    return next((s for s in BRANCH_SUFFIXES if text.endswith(s)), None)
 
 
 def normalize_station(name: object) -> str:
@@ -198,7 +247,12 @@ def load_timetable(path: str | Path, weektag: str | None = "DAY") -> pd.DataFram
     df = df.assign(
         arrive_sec=arrive.fillna(depart),
         depart_sec=depart.fillna(arrive),
-        line_key=[line_key(l, g) for l, g in zip(df["LINE"], df["GUBHANG"])],
+        line_key=[
+            line_key(l, g, s, e)
+            for l, g, s, e in zip(
+                df["LINE"], df["GUBHANG"], df["ST_STT_NM"], df["ED_STT_NM"]
+            )
+        ],
     )
     return df.dropna(subset=["arrive_sec", "depart_sec"]).reset_index(drop=True)
 
