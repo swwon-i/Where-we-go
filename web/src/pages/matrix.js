@@ -100,6 +100,18 @@ export function matrixPanel(container, roomId, map = {}) {
     });
   }
 
+  /**
+   * 펼쳐 둔 칸을 접고 지도의 경로도 지운다.
+   *
+   * 밖에서도 부른다 — 이동시간 탭을 떠날 때 표와 지도가 따로 놀지 않게 한다.
+   */
+  function closeDetail() {
+    openCell = null;
+    $$('.detail-row', container).forEach((r) => r.remove());
+    $$('.cell.is-open', container).forEach((c) => c.classList.remove('is-open'));
+    map.onRoute?.(null);
+  }
+
   async function toggleDetail(cell) {
     const key = `${cell.dataset.row}:${cell.dataset.col}`;
     const row = cell.closest('tr');
@@ -107,10 +119,7 @@ export function matrixPanel(container, roomId, map = {}) {
       ? row.nextElementSibling : null;
 
     if (openCell === key) {
-      openCell = null;
-      existing?.remove();
-      $$('.cell.is-open', container).forEach((c) => c.classList.remove('is-open'));
-      map.onRoute?.(null);
+      closeDetail();
       return;
     }
 
@@ -150,7 +159,7 @@ export function matrixPanel(container, roomId, map = {}) {
   }
 
   paint();
-  return { recalculate: calculate };
+  return { recalculate: calculate, closeDetail };
 }
 
 // ── 그리기 ──────────────────────────────────────────────────────────────────

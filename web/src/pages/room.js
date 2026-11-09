@@ -208,6 +208,9 @@ function paintShell() {
 
   $$('.tab').forEach((tab) => {
     tab.onclick = () => {
+      // 떠나는 탭이 지도에 그려 둔 것을 거둔다. 펼친 칸을 접으면 경로도 함께 지워진다
+      // (closeDetail → onRoute(null)). 거두지 않으면 다른 탭까지 따라다닌다.
+      if (activeTab === 'matrix' && tab.dataset.panel !== 'matrix') matrix?.closeDetail();
       activeTab = tab.dataset.panel;
       // 떠 있던 장소 카드도 닫는다 — 가리키던 핀이 사라지면 허공에 뜬 카드가 된다.
       mapView?.closeCard();
