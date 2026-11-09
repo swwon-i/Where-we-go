@@ -1227,6 +1227,15 @@ def main(argv: list[str] | None = None) -> int:
     express_lines = sorted({l for l in stations["line"].unique() if is_express(l)})
     print(f"  역 {len(stations)}개 (좌표 미매칭 {len(missing)} 제외) · "
           f"구간 {len(legs)} · 환승쌍 {len(transfers)}", flush=True)
+    if len(missing):
+        # 개수만 찍으면 지나친다. 역 하나가 빠지면 노선이 그 자리에서 두 토막이 나므로
+        # 이름을 그대로 적는다 — 회기가 빠져 1호선이 청량리에서 끊긴 것을 한참 뒤에 알았다.
+        names = ", ".join(
+            f"{base_line(r.line)}호선 {r.station}"
+            for r in missing.itertuples()
+            if isinstance(r.station, str)
+        )
+        print(f"  ! 좌표를 못 찾아 뺀 역: {names or '(역명이 빈 행)'}", flush=True)
     if express_lines:
         n_ex = int(stations["line"].map(is_express).sum())
         print(f"  급행 분리: {', '.join(express_lines)} · 급행 정차 {n_ex}개", flush=True)

@@ -70,6 +70,13 @@ LINE_ALIAS: dict[str, str] = {
 STATION_ALIAS: dict[tuple[str, str], str] = {
     ("4", "당고개"): "불암산",     # 2024 진접선 연장으로 개명
     ("6", "신내역"): "신내",       # 역명에 '역'이 붙은 표기
+    ("1", "평택지제"): "지제",     # 시각표는 '평택지제', 역사마스터는 '지제'
+    # 같은 역을 시각표는 '자양', 역사마스터는 '뚝섬유원지' 로 적는다. 추정이 아니라 확인된 것이다:
+    # 역사마스터 7호선 연번이 2729 건대입구 → 2730 뚝섬유원지 → 2731 청담 이고,
+    # 「역간거리 및 소요시간」은 237 건대입구 → 238 자양 → 239 청담 으로 같은 자리를 가리킨다.
+    # 거리도 맞는다 — 건대입구→뚝섬유원지 직선 1.1km (파일의 자양 1.0km),
+    # 뚝섬유원지→청담 1.8km (파일의 청담 2.0km). 건대입구와 청담 사이에 역은 하나뿐이다.
+    ("7", "자양"): "뚝섬유원지",
 }
 
 #: 대조용 참조값 — 서울교통공사 「열차운행현황」(2024-03-31)의 호선별 운행 시격(분).
@@ -329,29 +336,61 @@ def join_station_coords(
     """시각표의 (호선, 역명) 에 역사마스터의 위경도를 붙인다.
 
     `(붙은 것, 못 붙은 것)` 을 돌려준다. 못 붙은 것은 수동 매핑 대상이다.
+
+    <b>호선으로 못 찾으면 역명만으로 한 번 더 찾는다.</b> 좌표는 역의 것이지 노선의
+    것이 아닌데, 역사마스터는 한 역을 한 호선으로만 담는 경우가 있다. 그러면 다른
+    호선 시각표에서 그 역을 물을 때 못 찾고, 못 찾은 역은 그래프에서 통째로 빠진다 —
+    역 하나가 빠지면 노선이 그 자리에서 두 토막이 난다.
+
+    실제로 이것 때문에 다섯 역이 빠져 있었다::
+
+        1호선 회기    역사마스터가 '중앙선' 으로 담아 LINE_ALIAS 에서 떨어졌다
+        1호선 창동    '4호선' 행만 있다
+        2호선 까치산  '5호선' 행만 있다
+        1호선 평택지제  이름이 '지제' 다 (STATION_ALIAS 로 처리)
+        7호선 자양    역사마스터에 아예 없다 (이 함수로는 못 푼다)
+
+    역명 보강은 **호선 매핑을 거치지 않은 원본 전체**에서 찾는다. 회기처럼 LINE_ALIAS 에
+    없는 호선으로 담긴 행은 이미 걸러진 뒤라, 거른 것에서 찾으면 여전히 못 만난다.
     """
     master = master.copy()
     master["line"] = master["호선"].map(LINE_ALIAS)
-    master = master.dropna(subset=["line"])
-    master["key"] = master["line"] + "|" + master["역사명"].map(normalize_station)
-    lookup = master.drop_duplicates("key").set_index("key")
+
+    # 역명만으로 찾는 표. 호선을 거르기 전에 만든다.
+    by_name = master.copy()
+    by_name["nkey"] = by_name["역사명"].map(normalize_station)
+    by_name = by_name.drop_duplicates("nkey").set_index("nkey")[["위도", "경도"]]
+
+    by_line = master.dropna(subset=["line"]).copy()
+    by_line["key"] = by_line["line"] + "|" + by_line["역사명"].map(normalize_station)
+    by_line = by_line.drop_duplicates("key").set_index("key")[["위도", "경도"]]
 
     # 좌표는 급행/완행을 가리지 않는다. 같은 역의 같은 자리다 — 기준 호선으로 찾는다.
     stations = stations.copy()
     base = stations["line"].map(base_line)
-    aliased = [
-        STATION_ALIAS.get((b, s), s) for b, s in zip(base, stations["station"])
-    ]
-    stations["key"] = base + "|" + pd.Series(aliased, index=stations.index).map(normalize_station)
+    aliased = pd.Series(
+        [STATION_ALIAS.get((b, s), s) for b, s in zip(base, stations["station"])],
+        index=stations.index,
+    ).map(normalize_station)
+    stations["key"] = base + "|" + aliased
+    stations["nkey"] = aliased
 
-    joined = stations.join(lookup[["위도", "경도"]], on="key")
+    joined = stations.join(by_line, on="key")
     joined = joined.rename(columns={"위도": "lat", "경도": "lng"})
     joined["lat"] = pd.to_numeric(joined["lat"], errors="coerce")
     joined["lng"] = pd.to_numeric(joined["lng"], errors="coerce")
 
+    # 호선으로 못 찾은 것만 역명으로 메운다. 찾은 것은 건드리지 않는다.
+    # 숫자로 바꾼 뒤에 메운다 — 문자열인 채로 fillna 하면 pandas 가 자료형을 되돌린다.
+    for column, source in (("lat", "위도"), ("lng", "경도")):
+        joined[column] = joined[column].fillna(
+            pd.to_numeric(stations["nkey"].map(by_name[source]), errors="coerce")
+        )
+
     matched = joined.dropna(subset=["lat", "lng"])
     missing = joined[joined["lat"].isna()]
-    return matched.drop(columns="key"), missing.drop(columns="key")
+    drop = ["key", "nkey"]
+    return matched.drop(columns=drop), missing.drop(columns=drop)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

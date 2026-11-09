@@ -360,6 +360,14 @@ class TestJoinStationCoords:
             {"호선": "경인선", "역사명": "부평", "위도": "37.4894", "경도": "126.7246"},
             {"호선": "4호선", "역사명": "불암산", "위도": "37.6699", "경도": "127.0777"},
             {"호선": "수도권 광역급행철도", "역사명": "동탄", "위도": "37.2003", "경도": "127.0957"},
+            # 1호선도 서는데 역사마스터에는 4호선 행만 있다
+            {"호선": "4호선", "역사명": "창동", "위도": "37.6531", "경도": "127.0473"},
+            # 1호선 역인데 역사마스터가 중앙선으로 담았다 — LINE_ALIAS 에 없는 호선이다
+            {"호선": "중앙선", "역사명": "회기", "위도": "37.5895", "경도": "127.0576"},
+            # 시각표는 '평택지제', 역사마스터는 '지제'
+            {"호선": "경부선", "역사명": "지제", "위도": "37.0188", "경도": "127.0704"},
+            # 시각표는 '자양', 역사마스터는 '뚝섬유원지' — 같은 역이다
+            {"호선": "7호선", "역사명": "뚝섬유원지", "위도": "37.5315", "경도": "127.0667"},
         ])
 
     def test_direct_match(self, master):
@@ -388,6 +396,52 @@ class TestJoinStationCoords:
     def test_non_numbered_lines_are_ignored(self, master):
         """GTX 등은 역간 소요시간·배차가 없어 그래프에 넣지 않는다."""
         assert "수도권 광역급행철도" not in LINE_ALIAS
+
+    def test_name_fallback_when_master_lists_only_another_line(self, master):
+        """창동은 1·4호선 환승역인데 역사마스터에 4호선 행만 있다.
+
+        좌표는 역의 것이지 노선의 것이 아니다. 호선으로 못 찾으면 역명으로 찾아야
+        한다 — 못 찾으면 그 역이 통째로 빠져 1호선이 녹천과 방학에서 끊긴다.
+        """
+        stations = pd.DataFrame([{"line": "1", "si_id": "D", "station": "창동"}])
+        matched, missing = join_station_coords(stations, master)
+        assert len(matched) == 1 and missing.empty
+        assert matched.iloc[0]["lat"] == pytest.approx(37.6531)
+
+    def test_name_fallback_reaches_lines_outside_the_alias(self, master):
+        """회기는 역사마스터가 '중앙선' 으로 담아 LINE_ALIAS 에서 떨어진다.
+
+        역명 보강을 호선 거르기 **전** 원본에서 해야 하는 이유다. 거른 뒤에 찾으면
+        이 행은 이미 사라져 있어 여전히 못 만난다.
+        """
+        stations = pd.DataFrame([{"line": "1", "si_id": "E", "station": "회기"}])
+        matched, missing = join_station_coords(stations, master)
+        assert len(matched) == 1 and missing.empty
+        assert matched.iloc[0]["lat"] == pytest.approx(37.5895)
+
+    def test_station_alias_handles_prefixed_name(self, master):
+        """시각표의 '평택지제' 와 역사마스터의 '지제' 는 같은 역이다."""
+        stations = pd.DataFrame([{"line": "1", "si_id": "F", "station": "평택지제"}])
+        matched, missing = join_station_coords(stations, master)
+        assert len(matched) == 1 and missing.empty
+        assert matched.iloc[0]["lng"] == pytest.approx(127.0704)
+
+    def test_station_alias_handles_two_names_for_one_station(self, master):
+        """시각표의 '자양' 과 역사마스터의 '뚝섬유원지' 는 같은 역이다.
+
+        둘을 잇지 않으면 7호선이 건대입구와 청담에서 끊긴다. 두 이름 모두 공식 자료라
+        어느 쪽이 틀린 것이 아니다 — 부르는 이름이 둘일 뿐이다.
+        """
+        stations = pd.DataFrame([{"line": "7", "si_id": "H", "station": "자양"}])
+        matched, missing = join_station_coords(stations, master)
+        assert len(matched) == 1 and missing.empty
+        assert matched.iloc[0]["lat"] == pytest.approx(37.5315)
+
+    def test_fallback_does_not_override_the_line_match(self, master):
+        """호선으로 찾은 좌표를 역명 보강이 덮어쓰면 안 된다."""
+        stations = pd.DataFrame([{"line": "2", "si_id": "G", "station": "강남"}])
+        matched, _ = join_station_coords(stations, master)
+        assert matched.iloc[0]["lat"] == pytest.approx(37.4979)
 class TestLineKey:
     def test_local_keeps_plain_line(self):
         assert line_key("9", "0") == "9"
