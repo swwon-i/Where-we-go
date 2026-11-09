@@ -112,7 +112,7 @@ export async function loginPage() {
         ${field('su-pw', '비밀번호', 'password', {
           name: 'password',
           extra: 'autocomplete="new-password" maxlength="64"',
-          hint: '8~64자.',
+          hint: '8~64자',
         })}
         ${field('su-pw2', '비밀번호 확인', 'password', {
           name: 'passwordConfirm',

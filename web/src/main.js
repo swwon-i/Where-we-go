@@ -10,6 +10,7 @@ import { setUnauthorizedHandler, forgetCsrf } from './api.js';
 import { route, notFound, start, go, path } from './router.js';
 import { render, notice } from './dom.js';
 import { loadCurrentUser, currentUser, setCurrentUser } from './session.js';
+import { wireGuide } from './guide.js';
 import { loginPage, setReturnTo } from './pages/login.js';
 import { roomsPage } from './pages/rooms.js';
 import { roomPage, leaveRoom } from './pages/room.js';
@@ -84,6 +85,7 @@ setUnauthorizedHandler(() => {
 });
 
 (async () => {
+  wireGuide();
   await loadCurrentUser();
   await start();
 })();
