@@ -433,11 +433,15 @@ div:has(> .place-card) { pointer-events: none; }
 .guide {
   width: min(720px, calc(100vw - 32px));
   max-height: calc(100dvh - 32px);
-  display: flex; flex-direction: column;
+  flex-direction: column;
   padding: 20px; border: 0; border-radius: 16px;
   background: var(--panel); color: var(--fg);
   box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
 }
+/* display 는 열렸을 때만 준다. 닫힌 dialog 를 숨기는 것은 브라우저 기본 규칙
+   (dialog:not([open]) { display: none })인데, 저자 스타일이 그것을 이긴다 —
+   .guide 에 그냥 flex 를 걸면 닫아도 팝업이 화면에 눌어붙는다. */
+.guide[open] { display: flex; }
 .guide::backdrop { background: rgba(26, 28, 30, .55); }
 
 .guide-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex: none; }

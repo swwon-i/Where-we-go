@@ -99,8 +99,18 @@ function build() {
     .join('');
 
   dialog.onclick = (e) => {
-    // 바깥(::backdrop)을 눌러도 닫는다. dialog 자신이 클릭 대상이면 내용 밖이다.
-    if (e.target === dialog) { dialog.close(); return; }
+    // 바깥(::backdrop)을 눌러도 닫는다. backdrop 을 누르면 클릭 대상이 dialog 로 잡힌다.
+    //
+    // 다만 "대상이 dialog" 만으로는 모자라다 — 카드 안쪽 여백(padding)도 dialog 자신이라,
+    // 테두리에서 16px 안을 누르면 카드를 눌렀는데 닫혔다. 손가락으로는 자주 밟는 자리다.
+    // 눌린 자리가 카드 밖인지 좌표로 본다.
+    if (e.target === dialog) {
+      const box = dialog.getBoundingClientRect();
+      const outside = e.clientX < box.left || e.clientX > box.right
+                   || e.clientY < box.top || e.clientY > box.bottom;
+      if (outside) dialog.close();
+      return;
+    }
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (act === 'close') dialog.close();
     if (act === 'prev') go(at - 1);
