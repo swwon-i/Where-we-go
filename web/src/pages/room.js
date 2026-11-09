@@ -28,6 +28,14 @@ let roomId = null;
 /** 장소 찾기 결과. 지도에 회색 마커로 찍고, 누르면 카드가 뜬다. */
 let found = [];
 /**
+ * 지금 보고 있는 탭.
+ *
+ * 지도는 네 탭이 함께 쓰는 하나뿐이라, 무엇을 그릴지는 탭이 정해야 한다. 이것이 없을 때는
+ * 떠난 탭이 그려 둔 것이 그대로 남았다 — 장소 찾기의 회색 핀이 참가자 탭에도 보이고,
+ * 펼쳐 둔 경로가 방을 나갈 때까지 지도에 그려져 있었다.
+ */
+let activeTab = 'members';
+/**
  * 열어 둔 카드. `{ poiId }` 또는 `{ bookmarkId }`(지도에서 직접 찍은 후보).
  * 5초마다 상태를 다시 받아 지도를 통째로 다시 그리면 카드도 사라지므로, 무엇을 열어
  * 뒀는지 기억해 두었다가 다시 연다.
@@ -46,6 +54,7 @@ export function leaveRoom() {
   state = null;
   found = [];
   searched = false;
+  activeTab = 'members';
   openKey = null;
   pickMode = null;
   matrix = null;
@@ -199,6 +208,11 @@ function paintShell() {
 
   $$('.tab').forEach((tab) => {
     tab.onclick = () => {
+      activeTab = tab.dataset.panel;
+      // 떠 있던 장소 카드도 닫는다 — 가리키던 핀이 사라지면 허공에 뜬 카드가 된다.
+      mapView?.closeCard();
+      openKey = null;
+
       $$('.tab').forEach((t) => t.classList.toggle('is-on', t === tab));
       $$('.panel-body').forEach((p) => {
         p.hidden = p.id !== `panel-${tab.dataset.panel}`;
@@ -227,6 +241,9 @@ function paintShell() {
           },
         });
       }
+
+      // 바뀐 탭에 맞춰 바로 다시 그린다. 폴링(5초)을 기다리면 그 사이 옛 핀이 남아 있다.
+      if (state) paintMarkers();
     };
   });
 
@@ -311,14 +328,18 @@ function paintMarkers() {
     });
   });
 
+  // 검색 결과는 '장소 찾기' 탭에서만 찍는다. 결과 자체는 버리지 않는다 — 탭으로 돌아오면
+  // 목록과 핀이 그대로 다시 보여야 한다.
   // 이미 후보인 곳은 빨간 마커 하나로. 검색 결과에도 있으면 회색을 겹쳐 찍지 않는다.
   const bookmarked = new Set(state.bookmarks.map((b) => b.poiId).filter((id) => id != null));
-  found.filter((p) => !bookmarked.has(p.poiId)).forEach((p) => {
-    mapView.addMarker({
-      lat: p.lat, lng: p.lng, label: p.name, color: FOUND_COLOR,
-      onClick: () => openPlaceCard({ poiId: p.poiId }),
+  if (activeTab === 'find') {
+    found.filter((p) => !bookmarked.has(p.poiId)).forEach((p) => {
+      mapView.addMarker({
+        lat: p.lat, lng: p.lng, label: p.name, color: FOUND_COLOR,
+        onClick: () => openPlaceCard({ poiId: p.poiId }),
+      });
     });
-  });
+  }
 
   state.bookmarks.forEach((b) => {
     mapView.addMarker({
