@@ -32,6 +32,8 @@ const STEPS = [
     image: '3-find',
     body: `상호명으로 찾으면 지도에 회색 핀이 찍힙니다. 핀이나 목록을 누르면 가게 정보가 뜨고,
            거기서 북마크를 누르면 후보가 됩니다. 담은 후보는 빨간 핀으로 바뀝니다.`,
+    note: `찾을 수 있는 곳은 서울시의 음식점과 카페입니다.
+           서울시 인허가 데이터를 쓰기 때문에 분식집과 편의점도 함께 나옵니다.`,
   },
   {
     title: '누가 얼마나 걸리는지 봅니다',
@@ -45,6 +47,8 @@ const STEPS = [
     image: '5-route',
     body: `칸을 누르면 도보 · 승차 · 주행 · 환승이 한 줄씩 펼쳐지고 지도에 경로가 그려집니다.
            기다리는 시간이 얼마나 되는지도 함께 보입니다.`,
+    note: `이동 수단은 지하철 1~9호선과 서울 시내버스, 그리고 도보입니다.
+           택시나 자가용은 계산하지 않습니다.`,
   },
 ];
 
@@ -74,7 +78,10 @@ function build() {
     <div class="guide-shot">
       <img id="guide-img" alt="">
     </div>
-    <p class="guide-text" id="guide-text"></p>
+    <div class="guide-copy">
+      <p class="guide-text" id="guide-text"></p>
+      <p class="guide-note" id="guide-note" hidden></p>
+    </div>
     <div class="guide-foot">
       <button class="guide-arrow prev" data-act="prev" aria-label="이전">
         <span class="chev" aria-hidden="true"></span>
@@ -115,8 +122,16 @@ function go(next) {
   at = Math.max(0, Math.min(STEPS.length - 1, next));
   const step = STEPS[at];
 
+  const tidy = (text) => text.replace(/\s+/g, ' ').trim();
+
   $('#guide-title', dialog).textContent = `${at + 1}. ${step.title}`;
-  $('#guide-text', dialog).textContent = step.body.replace(/\s+/g, ' ').trim();
+  $('#guide-text', dialog).textContent = tidy(step.body);
+
+  // 담고 있는 범위를 적는 자리. 쓰는 법이 아니라 "여기까지만 된다"는 말이라 따로 둔다 —
+  // 서울 밖 가게를 찾거나 택시 시간을 기대하는 사람이 헤매지 않게 한다.
+  const note = $('#guide-note', dialog);
+  note.textContent = step.note ? tidy(step.note) : '';
+  note.hidden = !step.note;
 
   const img = $('#guide-img', dialog);
   img.src = `/guide/${step.image}.webp`;
