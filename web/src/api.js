@@ -96,6 +96,14 @@ export const api = {
   login: (loginId, password) => request('POST', '/auth/login', { loginId, password }),
   logout: () => request('POST', '/auth/logout'),
 
+  /**
+   * 탈퇴. 되돌릴 수 없다.
+   *
+   * 들어가 있던 방에서 모두 빠지고 계정이 익명이 된다. 내가 만든 방이라도 남은 사람이
+   * 있으면 가장 먼저 들어온 참가자에게 넘어간다 — 혼자 쓰던 방만 지워진다.
+   */
+  withdraw: () => request('DELETE', '/auth/me'),
+
   /** 로그인 상태 확인. 로그인하지 않았으면 예외 대신 null 을 준다 — 흔한 상태지 오류가 아니다. */
   async me() {
     try {
@@ -113,6 +121,12 @@ export const api = {
   joinRoom: (roomId) => request('POST', `/rooms/${roomId}/members`),
   joinByCode: (code) => request('POST', '/rooms/join', { code }),
   regenerateCode: (roomId) => request('POST', `/rooms/${roomId}/code`),
+
+  /** 이 방에서 나만 뺀다. 방장이면 다음 사람에게 넘어가고, 마지막이면 방이 지워진다. */
+  leaveRoom: (roomId) => request('DELETE', `/rooms/${roomId}/members/me`),
+
+  /** 방을 없앤다. 방장만. 나가기와 달리 모두가 방을 잃는다. */
+  deleteRoom: (roomId) => request('DELETE', `/rooms/${roomId}`),
   setOrigin: (roomId, origin) =>
     request('PUT', `/rooms/${roomId}/members/me/origin`, origin),
   addBookmark: (roomId, bookmark) => request('POST', `/rooms/${roomId}/bookmarks`, bookmark),

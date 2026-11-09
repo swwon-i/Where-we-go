@@ -242,7 +242,7 @@ public class RoomService {
         if (repository.deleteBookmark(roomId, bookmarkId, me) == 0) {
             // 0건이면 없는 것이거나 남의 것이다. 어느 쪽인지 알려줘야 화면이 설명할 수 있다.
             if (repository.bookmarkExists(roomId, bookmarkId)) {
-                throw new ForbiddenException("담은 사람만 지울 수 있습니다");
+                throw new ForbiddenException("담은 사람이나 방장만 뺄 수 있습니다");
             }
             throw new NotFoundException("없는 북마크입니다");
         }
@@ -255,5 +255,74 @@ public class RoomService {
             throw new NotAMemberException("먼저 방에 들어가야 합니다");
         }
         return me.id();
+    }
+
+    // ── 나가기 · 삭제 ───────────────────────────────────────────────────────
+
+    /**
+     * 방을 없앤다. 방장만.
+     *
+     * <p><b>나가기와 다른 뜻이다.</b> 나가기는 "나만 빠진다"이고 이것은 "이 모임을 끝낸다"이다.
+     * 남이 담은 후보까지 함께 사라지는데, 그것은 방을 만든 사람에게 있는 권한으로 본다.
+     *
+     * <p>계산 기록({@code matrix_run})은 남는다 — 외래키를 걸지 않은 것이 그 때문이다.
+     */
+    @Transactional
+    public void deleteRoom(UUID roomId) {
+        var me = accounts.currentUser();
+        var room = repository.findRoom(roomId).orElseThrow(() -> new NotFoundException("없는 방입니다"));
+        if (room.ownerId() != me.id()) {
+            throw new ForbiddenException("방을 만든 사람만 방을 지울 수 있습니다");
+        }
+        repository.deleteRoom(roomId);
+    }
+
+    /** 이 방에서 나만 뺀다. */
+    @Transactional
+    public void leave(UUID roomId) {
+        repository.findRoom(roomId).orElseThrow(() -> new NotFoundException("없는 방입니다"));
+        leaveRoom(roomId, accounts.currentUser().id());
+    }
+
+    /**
+     * 탈퇴할 때 쓴다. 들어가 있는 모든 방에서 같은 규칙으로 빠진다.
+     *
+     * <p>세션이 아니라 <b>id 를 받는다</b> — 부르는 쪽이 탈퇴 처리 중이라 "지금 로그인한
+     * 사람"으로 찾으면 안 되고, 그래야 account 패키지에서 거꾸로 부를 수 있다.
+     */
+    @Transactional
+    public void leaveAllRooms(long userId) {
+        for (var roomId : repository.roomIdsOf(userId)) {
+            leaveRoom(roomId, userId);
+        }
+    }
+
+    /**
+     * 한 사람이 한 방에서 빠지는 규칙. 나가기와 탈퇴가 이것 하나를 같이 쓴다.
+     *
+     * <ul>
+     *   <li>마지막 한 명이면 방이 지워진다 — 아무도 없는 방을 남길 이유가 없다
+     *   <li>방장이면 가장 먼저 들어온 참가자에게 넘기고 나간다
+     *   <li>담아 둔 후보는 남는다. 모임의 공동 작업이지 내 소유물이 아니다
+     * </ul>
+     */
+    private void leaveRoom(UUID roomId, long userId) {
+        if (!repository.isMember(roomId, userId)) {
+            throw new NotAMemberException("이 방의 참가자가 아닙니다");
+        }
+        if (repository.memberCount(roomId) <= 1) {
+            repository.deleteRoom(roomId);
+            return;
+        }
+        var room = repository.findRoom(roomId).orElseThrow(() -> new NotFoundException("없는 방입니다"));
+        if (room.ownerId() == userId) {
+            // 참가자가 둘 이상인 것을 위에서 확인했으므로 반드시 있다.
+            long next = repository
+                    .nextOwnerAfter(roomId, userId)
+                    .orElseThrow(() -> new IllegalStateException("넘겨받을 참가자가 없습니다"));
+            repository.transferOwner(roomId, next);
+        }
+        repository.removeMember(roomId, userId);
+        repository.touchActivity(roomId);
     }
 }

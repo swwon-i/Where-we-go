@@ -168,7 +168,9 @@ cd server && ./gradlew perfTest     # 성능 측정 → build/reports/perf/perf.
 | `GET /api/v1/places/nearby` · `/search` · `/{poiId}` | 반경 검색(`ST_DWithin` + GiST) · 상호명(pg_trgm) · 상세(출처·회차·검수 기록) | 공개 |
 | `GET /api/v1/routes` | 단건 경로 — 좌표나 역 이름, 시간대 | 공개 |
 | `POST /api/v1/auth/signup` · `/login` · `/logout` | 세션 로그인 + CSRF | |
+| `DELETE /api/v1/auth/me` | 탈퇴 — 계정은 익명이 되고 방과 후보는 남는다 | 본인 |
 | `/api/v1/rooms/**` | 방 · 참가 · 출발지 · 후보 | 참가자 |
+| `DELETE /api/v1/rooms/{id}/members/me` · `/rooms/{id}` | 나가기(방장이면 넘김) · 방 없애기 | 참가자 · 방장 |
 | `POST /api/v1/rooms/{id}/matrix` | 이동시간 행렬 (동기, `stats` 포함) | 참가자 |
 | `GET /api/v1/rooms/{id}/routes` | 행렬 칸의 경로 상세 — 구간 + 지도용 좌표열 | 참가자 |
 | `GET /api/v1/admin/*` | 적재 회차 · 검수 집계/레코드 · 그래프 통계 | 관리자 |

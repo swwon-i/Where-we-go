@@ -13,6 +13,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.session.SessionAuthenticationStrategy;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.csrf.CsrfToken;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -27,6 +28,7 @@ import org.springframework.web.bind.annotation.RestController;
  *   POST /api/v1/auth/login    {loginId, password}
  *   POST /api/v1/auth/logout
  *   GET  /api/v1/auth/me
+ *   DELETE /api/v1/auth/me   탈퇴
  * </pre>
  */
 @RestController
@@ -34,6 +36,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AccountController {
 
     private final AccountService accounts;
+    private final WithdrawalService withdrawals;
     private final AuthenticationManager authenticationManager;
     private final SecurityContextRepository contextRepository;
     private final SessionAuthenticationStrategy sessionStrategy;
@@ -41,11 +44,13 @@ public class AccountController {
 
     public AccountController(
             AccountService accounts,
+            WithdrawalService withdrawals,
             AuthenticationManager authenticationManager,
             SecurityContextRepository contextRepository,
             SessionAuthenticationStrategy sessionStrategy,
             AdminPolicy adminPolicy) {
         this.accounts = accounts;
+        this.withdrawals = withdrawals;
         this.authenticationManager = authenticationManager;
         this.contextRepository = contextRepository;
         this.sessionStrategy = sessionStrategy;
@@ -121,6 +126,28 @@ public class AccountController {
     public Me me() {
         var user = accounts.byId(currentUserId());
         return me(user);
+    }
+
+    /**
+     * 탈퇴.
+     *
+     * <p>들어가 있던 방에서 모두 빠지고 계정이 익명이 된다. 내가 만든 방이라도 남은 사람이
+     * 있으면 사라지지 않는다 — 가장 먼저 들어온 참가자에게 넘어간다. 혼자 쓰던 방만 지워진다.
+     *
+     * <p>담아 둔 후보는 남고, 표시는 "탈퇴한 사용자님이 담음"이 된다.
+     * <b>되돌릴 수 없다</b> — 같은 아이디로 다시 가입해도 다른 사람이다.
+     */
+    @DeleteMapping("/me")
+    public ResponseEntity<Void> withdraw(HttpServletRequest request) {
+        withdrawals.withdraw(currentUserId());
+
+        // 계정을 지웠으니 들고 있던 세션도 끊는다. 남겨 두면 다음 요청이 없는 계정을 찾는다.
+        var session = request.getSession(false);
+        if (session != null) {
+            session.invalidate();
+        }
+        SecurityContextHolder.clearContext();
+        return ResponseEntity.noContent().build();
     }
 
     /**

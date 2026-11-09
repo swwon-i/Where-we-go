@@ -8,6 +8,7 @@
 import { api, ApiError } from '../api.js';
 import { render, $, $$, esc, notice, busy, formatCode } from '../dom.js';
 import { loadKakao, MapUnavailable, mapNotice, createMap } from '../kakao.js';
+import { go } from '../router.js';
 import { matrixPanel, resetMatrix } from './matrix.js';
 
 /** 출발지와 후보를 색으로 가른다. */
@@ -103,6 +104,8 @@ function paintShell() {
         </span>
         <button id="share" class="link">링크 복사</button>
         ${state.iAmOwner ? '<button id="regen" class="link">코드 재발급</button>' : ''}
+        <button id="leave" class="link">방 나가기</button>
+        ${state.iAmOwner ? '<button id="delete-room" class="link danger">방 삭제</button>' : ''}
         <span id="share-done" class="ok" hidden>복사했습니다</span>
         <span id="matrix-state" class="state-pill"></span>
       </div>
@@ -166,6 +169,34 @@ function paintShell() {
       }
     }));
 
+  $('#leave').onclick = (e) =>
+    busy(e.target, async () => {
+      if (!confirm(leaveWarning())) return;
+      try {
+        await api.leaveRoom(roomId);
+        leaveRoom();  // 폴링을 멈춘다. 더 이상 볼 수 없는 방이다
+        go('/rooms');
+      } catch (err) {
+        alert(err instanceof ApiError ? err.message : '나가지 못했습니다.');
+      }
+    });
+
+  $('#delete-room')?.addEventListener('click', (e) =>
+    busy(e.target, async () => {
+      // 나가기와 다른 일이다. 무엇이 함께 사라지는지 세어서 보여준다.
+      const warning = `"${state.title}" 을(를) 지웁니다.\n`
+        + `참가자 ${state.members.length}명과 후보 ${state.bookmarks.length}곳이 함께 사라지고,`
+        + ' 되돌릴 수 없습니다.\n\n지울까요?';
+      if (!confirm(warning)) return;
+      try {
+        await api.deleteRoom(roomId);
+        leaveRoom();
+        go('/rooms');
+      } catch (err) {
+        alert(err instanceof ApiError ? err.message : '지우지 못했습니다.');
+      }
+    }));
+
   $$('.tab').forEach((tab) => {
     tab.onclick = () => {
       $$('.tab').forEach((t) => t.classList.toggle('is-on', t === tab));
@@ -203,6 +234,26 @@ function paintShell() {
     e.preventDefault();
     findPlaces();
   };
+}
+
+/**
+ * 나가기 확인 문구.
+ *
+ * 같은 버튼이 상황에 따라 다른 일을 한다 — 방장이 나가면 방장이 넘어가고, 마지막 한 명이
+ * 나가면 방이 지워진다. **누구에게 넘어가는지 이름까지 적는다**: 모르는 사이에 방장이
+ * 되는 쪽은 어쩔 수 없어도, 넘기는 쪽은 알고 넘겨야 한다.
+ */
+function leaveWarning() {
+  const others = state.members.filter((m) => !m.isMe);
+  if (!others.length) {
+    return `나가면 "${state.title}" 에 아무도 남지 않아 방이 지워집니다.\n\n나갈까요?`;
+  }
+  if (state.iAmOwner) {
+    // 서버도 들어온 차례로 고른다. members 가 그 순서다.
+    return `나가면 방장이 ${others[0].nickname}님에게 넘어갑니다.\n`
+      + '담아 둔 후보는 남습니다.\n\n나갈까요?';
+  }
+  return `"${state.title}" 에서 나갑니다. 담아 둔 후보는 남습니다.\n\n나갈까요?`;
 }
 
 // ── 지도 ────────────────────────────────────────────────────────────────────
@@ -339,8 +390,12 @@ function placeCard(key, place, bookmark) {
   } else if (bookmark.addedByMe) {
     who = '내가 담은 후보';
     action = '<button data-act="remove">북마크 취소</button>';
+  } else if (state.iAmOwner) {
+    // 방장은 남이 담은 것도 뺀다 — 담은 사람이 방을 떠나면 아무도 못 빼게 되기 때문이다.
+    who = `${esc(bookmark.addedByNickname)}님이 담음`;
+    action = '<button data-act="remove">후보에서 빼기</button>';
   } else {
-    // 담은 사람만 뺄 수 있다(서버가 403). 누를 수 없는 버튼을 두지 않고 누가 담았는지 적는다.
+    // 담은 사람도 방장도 아니면 서버가 403 이다. 누를 수 없는 버튼을 두지 않는다.
     who = `${esc(bookmark.addedByNickname)}님이 담음`;
   }
 
@@ -475,7 +530,8 @@ function paintBookmarks() {
           ${state.bookmarks.map((b) => `
             <li>
               <b>${esc(b.name)}</b>
-              ${b.addedByMe ? `<button class="link del" data-id="${b.bookmarkId}">빼기</button>` : ''}
+              ${b.addedByMe || state.iAmOwner
+                ? `<button class="link del" data-id="${b.bookmarkId}">빼기</button>` : ''}
               <div class="meta">
                 ${esc(b.address ?? '주소 없음')}
                 <span class="muted">· ${esc(b.addedByNickname)}</span>

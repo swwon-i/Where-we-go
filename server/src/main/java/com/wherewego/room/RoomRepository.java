@@ -319,12 +319,20 @@ public class RoomRepository {
                         rs.getTimestamp("created_at").toInstant()));
     }
 
-    /** 담은 사람만 지울 수 있다. 지운 행 수를 돌려주므로 0 이면 권한이 없거나 없는 것이다. */
+    /**
+     * 담은 사람이나 방장이 지운다. 지운 행 수를 돌려주므로 0 이면 권한이 없거나 없는 것이다.
+     *
+     * <p>방장이 낀 것은 <b>담은 사람이 방을 떠날 수 있기 때문</b>이다. 떠난 사람의 후보는
+     * 그대로 남는데(모임의 공동 작업이다) 담은 사람만 뺄 수 있으면 아무도 못 빼는 후보가 된다.
+     */
     int deleteBookmark(UUID roomId, long bookmarkId, long userId) {
         return jdbc.update(
                 """
                 DELETE FROM bookmark
-                WHERE id = :id AND room_id = :room AND added_by = :uid
+                WHERE id = :id AND room_id = :room
+                  AND (added_by = :uid
+                       OR EXISTS (SELECT 1 FROM room r
+                                  WHERE r.id = :room AND r.owner_id = :uid))
                 """,
                 new MapSqlParameterSource()
                         .addValue("id", bookmarkId)
@@ -349,5 +357,59 @@ public class RoomRepository {
                         new MapSqlParameterSource("room", roomId),
                         Integer.class)
                 .isEmpty();
+    }
+
+    // ── 나가기 · 삭제 ───────────────────────────────────────────────────────
+
+    /** 방을 지운다. 참가자와 후보는 ON DELETE CASCADE 로 함께 사라진다. */
+    int deleteRoom(UUID roomId) {
+        return jdbc.update(
+                "DELETE FROM room WHERE id = :id", new MapSqlParameterSource("id", roomId));
+    }
+
+    /** 참가 기록만 지운다. 그 사람이 담은 후보는 남는다. */
+    int removeMember(UUID roomId, long userId) {
+        return jdbc.update(
+                "DELETE FROM room_member WHERE room_id = :room AND user_id = :uid",
+                new MapSqlParameterSource().addValue("room", roomId).addValue("uid", userId));
+    }
+
+    int memberCount(UUID roomId) {
+        return jdbc.queryForObject(
+                "SELECT count(*) FROM room_member WHERE room_id = :room",
+                new MapSqlParameterSource("room", roomId),
+                Integer.class);
+    }
+
+    /**
+     * 방장이 빠질 때 뒤를 이을 사람. 가장 먼저 들어온 참가자다.
+     *
+     * <p>들어온 순서로 고르는 데 특별한 근거는 없다. 다만 <b>아무 기준 없이 고르면</b>
+     * 같은 방에서 두 번 돌릴 때 결과가 달라질 수 있어, 재현되는 기준이 필요하다.
+     */
+    Optional<Long> nextOwnerAfter(UUID roomId, long leavingUserId) {
+        var rows = jdbc.queryForList(
+                """
+                SELECT user_id FROM room_member
+                WHERE room_id = :room AND user_id <> :uid
+                ORDER BY joined_at, id LIMIT 1
+                """,
+                new MapSqlParameterSource().addValue("room", roomId).addValue("uid", leavingUserId),
+                Long.class);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.getFirst());
+    }
+
+    int transferOwner(UUID roomId, long newOwnerId) {
+        return jdbc.update(
+                "UPDATE room SET owner_id = :owner WHERE id = :id",
+                new MapSqlParameterSource().addValue("id", roomId).addValue("owner", newOwnerId));
+    }
+
+    /** 그 사람이 참가 중인 방 전부. 탈퇴할 때 하나씩 떠나기 위한 것이다. */
+    public List<UUID> roomIdsOf(long userId) {
+        return jdbc.queryForList(
+                "SELECT room_id FROM room_member WHERE user_id = :uid",
+                new MapSqlParameterSource("uid", userId),
+                UUID.class);
     }
 }

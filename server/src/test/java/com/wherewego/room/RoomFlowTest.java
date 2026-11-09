@@ -420,7 +420,7 @@ class RoomFlowTest {
         }
 
         @Test
-        @DisplayName("담은 사람만 뺄 수 있다")
+        @DisplayName("담은 사람도 방장도 아니면 빼지 못한다")
         void onlyTheAdderCanRemove() throws Exception {
             var roomId = createRoom(owner);
             join(guest, roomId);

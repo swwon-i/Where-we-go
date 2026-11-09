@@ -83,6 +83,8 @@ button.link {
   border: 0; background: none; color: var(--accent); padding: 2px 4px; font-size: 13px;
 }
 button.link:hover { text-decoration: underline; }
+/* 되돌릴 수 없는 것. 색만 다르고 크기는 같다 — 눈에 띄되 먼저 눌리지는 않게 한다. */
+button.link.danger { color: var(--bad); }
 
 .meta { color: var(--muted); font-size: 12px; }
 .muted { color: var(--muted); }
@@ -177,6 +179,8 @@ button.link:hover { text-decoration: underline; }
   border-radius: 8px;
 }
 .room-row:hover { background: var(--panel-hover); text-decoration: none; }
+/* 탈퇴. 다른 것과 섞이지 않게 선 하나로 끊고 맨 아래에 둔다. */
+.account-box { padding-top: 20px; border-top: 1px solid var(--line); }
 .room-row b { font: 500 19px/1.3 var(--display); grid-column: 1; }
 .room-row .meta { grid-column: 1; }
 .room-row .code-chip { grid-column: 2; grid-row: 1 / span 2; cursor: inherit; }

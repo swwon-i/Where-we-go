@@ -30,6 +30,8 @@ import org.springframework.web.bind.annotation.RestController;
  *   PUT    /api/v1/rooms/{roomId}/members/me/origin   내 출발지
  *   POST   /api/v1/rooms/{roomId}/bookmarks           후보 담기
  *   DELETE /api/v1/rooms/{roomId}/bookmarks/{id}      후보 빼기
+ *   DELETE /api/v1/rooms/{roomId}/members/me          나가기
+ *   DELETE /api/v1/rooms/{roomId}                     방 없애기 (방장만)
  * </pre>
  *
  * <p>전부 로그인이 필요하다. 본인 확인은 세션이 하므로 요청에 사용자 식별자를 싣지 않는다 —
@@ -107,6 +109,30 @@ public class RoomController {
     public RoomView join(@PathVariable UUID roomId) {
         rooms.join(roomId);
         return rooms.view(roomId);
+    }
+
+    /**
+     * 이 방에서 나만 뺀다.
+     *
+     * <p>방장이 부르면 가장 먼저 들어온 참가자에게 방장이 넘어간다. 마지막 한 명이었으면
+     * 방이 지워진다. 담아 둔 후보는 남는다.
+     */
+    @DeleteMapping("/{roomId}/members/me")
+    public ResponseEntity<Void> leave(@PathVariable UUID roomId) {
+        rooms.leave(roomId);
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * 방을 없앤다. 방장만.
+     *
+     * <p>나가기와 뜻이 다르다 — 이쪽은 모두가 방을 잃는다. 되돌릴 수 없으므로 화면이
+     * 무엇이 사라지는지 적어 두고 확인을 받는다.
+     */
+    @DeleteMapping("/{roomId}")
+    public ResponseEntity<Void> delete(@PathVariable UUID roomId) {
+        rooms.deleteRoom(roomId);
+        return ResponseEntity.noContent().build();
     }
 
     // ── 출발지 ──────────────────────────────────────────────────────────────

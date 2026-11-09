@@ -4,10 +4,12 @@
  * 계정이 생기면서 가능해진 화면이다. 익명 구조에서는 링크를 잃으면 방도 잃었다.
  */
 
-import { api, ApiError } from '../api.js';
+import { api, ApiError, forgetCsrf } from '../api.js';
 import {
   render, $, esc, ago, busy, notice, showError, showFieldErrors, formatCode,
 } from '../dom.js';
+import { go } from '../router.js';
+import { setCurrentUser } from '../session.js';
 
 export async function roomsPage() {
   render(`
@@ -38,6 +40,10 @@ export async function roomsPage() {
           </form>
           <em id="join-error" class="form-error" hidden></em>
           <p class="hint">대소문자와 하이픈은 가리지 않습니다. 링크를 받았다면 그냥 눌러도 됩니다.</p>
+        </section>
+
+        <section class="account-box">
+          <button id="withdraw" class="link danger">회원 탈퇴</button>
         </section>
       </div>
     </div>
@@ -89,6 +95,25 @@ export async function roomsPage() {
       }
     });
   };
+
+  $('#withdraw').onclick = (e) =>
+    busy(e.target, async () => {
+      // 무엇이 남고 무엇이 사라지는지 먼저 말한다. "정말로?" 만 묻는 것은 안내가 아니다.
+      const warning = '탈퇴하면 다시 들어올 수 없고, 같은 아이디로 가입해도 다른 사람입니다.\n\n'
+        + '혼자 쓰던 방은 지워집니다.\n'
+        + '다른 사람이 있는 방은 남고, 내가 방장이면 다음 사람에게 넘어갑니다.\n'
+        + '담아 둔 후보는 남고 "탈퇴한 사용자"로 보입니다.\n\n'
+        + '탈퇴할까요?';
+      if (!confirm(warning)) return;
+      try {
+        await api.withdraw();
+        setCurrentUser(null);
+        forgetCsrf();
+        go('/login', { replace: true });
+      } catch (err) {
+        alert(err instanceof ApiError ? err.message : '탈퇴하지 못했습니다.');
+      }
+    });
 
   await paintList();
 }
