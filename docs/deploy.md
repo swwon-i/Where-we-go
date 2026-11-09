@@ -184,12 +184,69 @@ docker compose --profile etl run --rm --user "$(id -u):$(id -g)" etl etl.fetch -
 | | |
 |---|---|
 | 코드 갱신 | `git pull && docker compose up -d --build` |
+| 그래프 갱신 | 아래 참조. **`git pull` 로는 안 바뀐다** — 그래프는 코드가 아니라 DB 에 있다 |
 | 로그 | `docker compose logs --tail 100 server` · 적재는 `etl/out/logs/` |
 | 적재 기록 | 관리자 화면 `/#/admin` 또는 `ingest_run` 테이블 |
 | 재부팅 | db · server · caddy 는 `restart: unless-stopped` 라 저절로 뜬다. cron 도 그대로 |
 | 백업 | 5번의 `pg_dump` 를 cron 에 걸거나 EBS 스냅샷 |
 | 비용 | 2GB 서버가 어디든 월 $13~20 + 디스크 몇 달러. **안 쓸 때는 인스턴스를 중지**하면 컴퓨팅 요금이 멈추고 디스크·고정 IP 만 남는다. Google Cloud 체험판이면 크레딧에서 빠진다 |
 | 예산 알림 | 처음 만들 때 **예산 알림을 걸어 둔다** — Google Cloud: 결제 → 예산 및 알림, AWS: Budgets |
+
+### 그래프만 갱신하기
+
+적재(`etl/ingest`)는 서버가 매일 돌리지만 **그래프는 아니다**. 노선·역이 바뀌거나
+빌드 코드(`etl/subway_timing.py` 등)를 고쳤으면 로컬에서 다시 빌드해 그 테이블만 옮긴다.
+5번처럼 DB 를 통째로 옮기면 서버의 계정·방·적재 기록까지 덮어쓰므로 쓰지 않는다.
+
+로컬:
+
+```bash
+python -m etl.build_graph                 # 약 2~3분. "좌표 미매칭 0" 인지 본다
+export MSYS_NO_PATHCONV=1
+docker exec wwg-db sh -c 'pg_dump -U "$POSTGRES_USER" -d wherewego -Fc \
+  -t graph_build -t graph_node -t graph_edge -t transit_stop -t transit_route \
+  -f /tmp/graph.dump'
+docker cp wwg-db:/tmp/graph.dump ./graph.dump      # 약 13MB
+# Google Cloud:  gcloud compute scp ./graph.dump <VM 이름>:~/ --zone <영역>
+```
+
+서버:
+
+```bash
+cd ~/Where-we-go
+docker compose cp ~/graph.dump db:/tmp/graph.dump
+docker compose exec db pg_restore -U wherewego -d wherewego \
+  --no-owner --clean --if-exists /tmp/graph.dump
+docker compose restart server              # 그래프를 메모리에 들고 있다. 다시 읽게 한다
+rm ~/graph.dump
+```
+
+`--clean` 이 다섯 테이블을 지우고 다시 만든다. 방·계정은 다른 테이블이라 그대로다.
+참가자의 출발지는 `graph_node` 를 외래키 없이 가리키므로 지워지지 않고,
+빌드가 바뀐 것만 표시됐다가 다음 계산 때 알아서 다시 붙는다(재스냅).
+
+확인. 들어왔는지는 DB 에 묻는 것이 확실하다 — HTTP 를 거치지 않는다:
+
+```bash
+docker compose exec db psql -U wherewego -d wherewego -c \
+  "SELECT s.name, count(*) FROM graph_edge e
+   JOIN graph_build b ON b.id = e.build_id AND b.is_active
+   JOIN graph_node n ON n.id = e.from_node_id
+   JOIN transit_stop s ON s.id = n.stop_id
+   WHERE e.kind = 'RIDE' AND s.name = '회기' GROUP BY s.name"
+```
+
+경로까지 보려면 **공개 서버에서는 `localhost:8080` 을 부르면 안 된다** —
+`docker-compose.prod.yml` 이 그 포트를 지웠고 Caddy 의 443 만 열려 있다.
+컨테이너 망 안에서 직접 부르는 쪽이 도메인·인증서와 무관해 편하다:
+
+```bash
+docker compose exec caddy wget -qO- \
+  'http://server:8080/api/v1/routes?from=%EC%B2%AD%EB%9F%89%EB%A6%AC&to=%ED%9A%8C%EA%B8%B0&departureHour=19'
+```
+
+**역 이름은 퍼센트 인코딩해야 한다.** 한글을 그대로 쿼리에 넣으면 톰캣이 400 을 준다
+(`%EC%B2%AD%EB%9F%89%EB%A6%AC` = 청량리, `%ED%9A%8C%EA%B8%B0` = 회기).
 
 ## 공개 서버에서 달라지는 것
 
