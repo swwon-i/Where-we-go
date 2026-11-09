@@ -22,6 +22,11 @@
    전부 여기 해당하므로 한 줄로 못박는다. */
 [hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
+/* 모바일 브라우저는 주소창이 접혔다 펴지며 높이가 변한다. 100% 는 펼쳐진 쪽을 기준으로 잡아
+   아래쪽이 도구 모음에 가린다 — dvh 는 지금 실제로 보이는 높이다. */
+@supports (height: 100dvh) {
+  html, body { height: 100dvh; }
+}
 body {
   display: flex; flex-direction: column;
   font: 14px/1.6 var(--body);
@@ -422,16 +427,20 @@ div:has(> .place-card) { pointer-events: none; }
 .map-credit a { color: inherit; }
 
 /* ── 사용 방법 ────────────────────────────────────────────────────────── */
-/* 캡쳐가 주인공이다. 테두리·버튼은 조용히 두고 그림만 또렷하게 둔다. */
+/* 캡쳐가 주인공이다. 테두리·버튼은 조용히 두고 그림만 또렷하게 둔다.
+   다만 한 화면에 다 들어와야 한다 — 안내를 읽으려고 스크롤을 하게 되면 안내가 아니다.
+   높이를 화면에 맞춰 묶고, 모자라면 그림 칸이 줄어 자리를 낸다(.guide-shot). */
 .guide {
-  width: min(960px, calc(100vw - 32px));
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  display: flex; flex-direction: column;
   padding: 20px; border: 0; border-radius: 16px;
   background: var(--panel); color: var(--fg);
   box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
 }
 .guide::backdrop { background: rgba(26, 28, 30, .55); }
 
-.guide-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; }
+.guide-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex: none; }
 .guide-head h2 { margin: 0; font: 500 20px/1.3 var(--display); }
 .guide-x {
   margin-left: auto; align-self: flex-start;
@@ -440,23 +449,27 @@ div:has(> .place-card) { pointer-events: none; }
 }
 .guide-x:hover { color: var(--fg); }
 
-/* 그림이 바뀌어도 칸 높이가 그대로라 아래 버튼이 뛰지 않는다. */
+/* 16/10 은 캡쳐의 비율이자 바라는 크기다. 화면이 낮으면 이 칸만 줄어들어 팝업을
+   화면 안에 들인다 — 줄어드는 자리를 여기 하나로 몰아 둔다. */
 .guide-shot {
   aspect-ratio: 16 / 10; border-radius: 8px; overflow: hidden;
   background: var(--bg); border: 1px solid var(--line);
+  flex: 0 1 auto; min-height: 0;
 }
-.guide-shot img { display: block; width: 100%; height: 100%; object-fit: cover; }
+/* 줄어든 칸에 맞춰 그림 전체가 들어오게 한다. cover 로 두면 설명해야 할 부분이 잘린다. */
+.guide-shot img { display: block; width: 100%; height: 100%; object-fit: contain; }
 
-/* 설명과 범위를 한 덩이로 묶어 높이를 잡아 둔다. 범위가 있는 장과 없는 장이
-   섞여 있어, 묶지 않으면 넘길 때마다 팝업이 아래위로 뛴다. */
-.guide-copy { margin-top: 16px; min-height: 108px; }
+/* 설명과 범위를 한 덩이로 묶는다. 예전에는 여기에 108px 를 비워 두어 장을 넘겨도 팝업이
+   뛰지 않게 했는데, 다섯 장 중 셋에서는 그 자리가 그냥 빈 칸이었고 그만큼 팝업이 높아져
+   화면을 넘겼다. 빈 칸을 없애고, 장마다 조금 움직이는 쪽을 택한다. */
+.guide-copy { margin-top: 16px; flex: none; }
 .guide-text { margin: 0; font-size: 14px; line-height: 1.6; color: var(--muted); }
 .guide-note {
   margin: 12px 0 0; padding: 10px 12px; border-radius: 8px;
   background: var(--bg); color: var(--muted); font-size: 13px; line-height: 1.6;
 }
 
-.guide-foot { display: flex; align-items: center; gap: 16px; margin-top: 16px; }
+.guide-foot { display: flex; align-items: center; gap: 16px; margin-top: 16px; flex: none; }
 .guide-arrow {
   width: 36px; height: 36px; padding: 0; border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
@@ -483,7 +496,6 @@ div:has(> .place-card) { pointer-events: none; }
 @media (max-width: 860px) {
   .guide { padding: 16px; }
   .guide-head h2 { font-size: 17px; }
-  .guide-copy { min-height: 150px; }
   .guide-text { font-size: 13px; }
   .guide-note { font-size: 12px; }
   .guide-dot span { width: 16px; }
@@ -494,14 +506,66 @@ div:has(> .place-card) { pointer-events: none; }
   .page { grid-template-columns: 1fr; gap: 28px; padding: 24px 16px 40px; }
   .page-side { order: -1; }
   .room-body { flex-direction: column; }
-  .map { height: 42vh; flex: none; }
-  .side, .side.wide { width: auto; flex: 1 0 auto; border-left: 0; border-top: 1px solid var(--line); }
-  .panel-body { overflow-y: visible; }
+  .map { height: 38vh; flex: none; }
+  /* 지도는 위에 붙박이고 패널만 스크롤한다 — 데스크톱과 같은 구조를 세로로 세운 것이다.
+     예전에는 패널이 자라고 화면 전체가 스크롤됐는데, 그러면 스크롤 길목 한가운데에 지도가
+     놓인다. 손가락으로 쓸면 지도가 움직일 뿐 화면은 내려가지 않아 아래 목록에 닿지 못한다. */
+  .side, .side.wide { width: auto; flex: 1; min-height: 0; border-left: 0; border-top: 1px solid var(--line); }
   .two { grid-template-columns: 1fr; }
   .admin { padding: 24px 16px 40px; }
   header { gap: 16px; padding: 8px 16px; flex-wrap: wrap; }
   .room-head, .bar { padding: 12px 16px; }
   .state-pill { margin-left: 0; flex-basis: 100%; }
+}
+
+/* ── 휴대폰 ───────────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  /* iOS 사파리는 글자가 16px 보다 작은 칸을 누르면 화면을 확대한다. 한 번 확대되면
+     스스로 돌아오지 않아 그 뒤로 가로로 밀면서 쓰게 된다 — 여기서만 16px 로 올린다. */
+  input, select, textarea { font-size: 16px; }
+
+  header { gap: 10px; padding: 6px 12px; }
+  .brand { font-size: 16px; gap: 6px; }
+  .brand-mark { width: 14px; height: 14px; border-width: 3px; }
+  header nav { gap: 14px; }
+  /* 손가락으로 누를 자리를 넓힌다. 글자 크기는 그대로 두고 여백만 준다. */
+  header nav a, header button.link { padding: 7px 2px; }
+  .head-right { gap: 12px; }
+
+  .room-head { padding: 10px 12px; gap: 10px 8px; }
+  .room-head h2 { font-size: 18px; }
+  .room-head button.link, .room-head .invite { font-size: 12px; }
+  .bar input[type=search] { min-width: 0; }
+
+  .map { height: 34dvh; }
+
+  /* 행렬 — 사람이 넷만 넘어도 가로가 모자란다. 장소 이름 칸을 왼쪽에 붙박아 두면
+     옆으로 밀어도 어느 줄을 보고 있는지 잃지 않는다. */
+  .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table.matrix th.corner, table.matrix th.place {
+    position: sticky; left: 0; z-index: 1; background: var(--panel);
+    min-width: 128px; width: 128px;
+  }
+  table.matrix th.place { font-size: 14px; }
+  /* 주소는 지우지 않고 한 줄로 접는다 — 같은 이름의 가게를 구분하는 데 쓰인다. */
+  table.matrix th.place .meta {
+    display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  table.matrix th, table.matrix td { padding: 10px 8px; }
+  .cell { min-width: 76px; }
+  .cell.ok b { font-size: 20px; }
+  .hour-pick input[type="range"] { width: 130px; }
+  .hour-pick output { font-size: 18px; min-width: 3.5em; }
+}
+
+/* 낮은 화면(가로로 든 휴대폰, 작은 노트북). 자리를 미리 잡아 두는 여백부터 거둔다 —
+   장을 넘길 때 팝업이 조금 뛰는 것보다 스크롤이 생기는 쪽이 나쁘다. */
+@media (max-height: 620px) {
+  .guide { padding: 14px; }
+  .guide-copy { margin-top: 12px; }
+  .guide-head { margin-bottom: 12px; }
+  .guide-foot { margin-top: 12px; }
+  .guide-arrow { width: 32px; height: 32px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
