@@ -46,6 +46,38 @@ tasks.named('test') {
 }
 
 /*
+ * 저장소 루트의 .env 를 태스크 환경변수로 넘긴다.
+ *
+ * Spring Boot 는 .env 를 읽지 않는다 — application.yml 의 ${WWG_DB_PASSWORD:...} 는
+ * OS 환경변수만 본다. Docker Compose 는 루트 .env 를 자동으로 읽으므로, 여기서 같은 파일을
+ * 읽어주면 컨테이너로 띄우든 Gradle 로 돌리든 설정이 하나로 유지된다.
+ *
+ * 성능 측정은 컨테이너의 DB 에 붙으므로 bootRun 과 같은 자격증명이 필요하다.
+ */
+ext.applyDotEnv = { task ->
+    def envFile = rootProject.file('../.env')
+    if (!envFile.exists()) return
+    envFile.readLines('UTF-8').each { line ->
+        line = line.trim()
+        if (line.isEmpty() || line.startsWith('#') || !line.contains('=')) return
+        def idx = line.indexOf('=')
+        task.environment line[0..<idx].trim(), line[(idx + 1)..-1].trim()
+    }
+}
+
+// 테스트도 컨테이너의 DB 에 붙는다. .env 없이는 112개가 커넥션 실패로 떨어진다.
+tasks.named('test') {
+    applyDotEnv(it)
+}
+
+/*
+ * 측정 JVM 의 힙. 개발 머신에서는 2g 로 고정해 회차마다 GC 조건을 같게 둔다.
+ * 메모리 2GB 서버(e2-small)에서는 2g 를 잡으면 DB 와 OS 몫까지 먹어 스왑으로 밀린다 —
+ * 서버에서는 -PperfHeap=768m 처럼 줄여서 돌린다 (deploy/perf/run-on-server.sh).
+ */
+ext.perfHeap = project.findProperty('perfHeap') ?: '2g'
+
+/*
  * 성능 측정. 활성 그래프 빌드가 있는 DB 가 필요하다. 결과는 build/reports/perf/perf.md.
  * 힙을 고정해 두어야 회차마다 GC 조건이 같다.
  */
@@ -57,9 +89,79 @@ tasks.register('perfTest', Test) {
     useJUnitPlatform {
         includeTags 'perf'
     }
-    maxHeapSize = '2g'
-    minHeapSize = '2g'
+    maxHeapSize = perfHeap
+    minHeapSize = perfHeap
     outputs.upToDateWhen { false }
+    applyDotEnv(it)
+}
+
+/*
+ * 동시 요청 스윕. 그래프를 메모리에 두는 것과 DB 에서 읽는 것, 사전계산 표를 조회하는 것을
+ * 동시 요청 10~100 에서 비교한다. 결과는 build/reports/perf/concurrency.md.
+ *
+ * 힙을 작게 주는 것이 요점이다 — 2g 로 돌리면 아무 수준에서도 무너지지 않아
+ * "사용자가 늘면 메모리가 터지지 않나" 에 답할 수 없다. 기본 512m 로 돌려 무너지는
+ * 지점을 찾고, -PsweepHeap=2g 로 다시 돌려 여유 있을 때의 숫자를 본다.
+ */
+tasks.register('sweepTest', Test) {
+    description = '동시 요청 10~100 — 인메모리 대 DB 간선 조회 대 사전계산 조회'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform {
+        includeTags 'perf'
+    }
+    filter {
+        includeTestsMatching 'com.wherewego.routing.ConcurrencySweepTest'
+    }
+    def heap = project.findProperty('sweepHeap') ?: '512m'
+    maxHeapSize = heap
+    minHeapSize = heap
+    outputs.upToDateWhen { false }
+    applyDotEnv(it)
+}
+
+/*
+ * 탐색 알고리즘 대조. 다익스트라 one-to-many · 다익스트라 1:1 × N · A* 1:1 × N.
+ * 결과는 build/reports/perf/algorithms.md.
+ */
+tasks.register('algorithmTest', Test) {
+    description = '다익스트라 대 A* — 같은 답을 내는 세 방식의 비교'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform {
+        includeTags 'perf'
+    }
+    filter {
+        includeTestsMatching 'com.wherewego.routing.AlgorithmCompareTest'
+    }
+    maxHeapSize = perfHeap
+    minHeapSize = perfHeap
+    outputs.upToDateWhen { false }
+    applyDotEnv(it)
+}
+
+/*
+ * pgRouting 대조. 탐색을 DB 안(pgr_dijkstraCost)에서 돌리는 것과 인메모리 CSR 을 비교한다.
+ * DB 컨테이너에 pgRouting 확장이 있어야 한다 — 없으면 건너뛴다(설치는 PgRoutingCompareTest 주석).
+ * 결과는 build/reports/perf/pgrouting.md.
+ */
+tasks.register('pgroutingTest', Test) {
+    description = 'pgRouting 대 인메모리 — 같은 답, 그래프 짓기와 탐색을 쪼개서'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform {
+        includeTags 'perf'
+    }
+    filter {
+        includeTestsMatching 'com.wherewego.routing.PgRoutingCompareTest'
+    }
+    maxHeapSize = perfHeap
+    minHeapSize = perfHeap
+    outputs.upToDateWhen { false }
+    applyDotEnv(it)
 }
 
 /*
@@ -70,13 +172,5 @@ tasks.register('perfTest', Test) {
  * 여기서 같은 파일을 읽어주면 컨테이너로 띄우든 bootRun 으로 띄우든 설정이 하나로 유지된다.
  */
 tasks.named('bootRun') {
-    def envFile = rootProject.file('../.env')
-    if (envFile.exists()) {
-        envFile.readLines('UTF-8').each { line ->
-            line = line.trim()
-            if (line.isEmpty() || line.startsWith('#') || !line.contains('=')) return
-            def idx = line.indexOf('=')
-            environment line[0..<idx].trim(), line[(idx + 1)..-1].trim()
-        }
-    }
+    applyDotEnv(it)
 }

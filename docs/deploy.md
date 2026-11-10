@@ -248,6 +248,42 @@ docker compose exec caddy wget -qO- \
 **역 이름은 퍼센트 인코딩해야 한다.** 한글을 그대로 쿼리에 넣으면 톰캣이 400 을 준다
 (`%EC%B2%AD%EB%9F%89%EB%A6%AC` = 청량리, `%ED%9A%8C%EA%B8%B0` = 회기).
 
+## 성능 측정 — 링크를 돌리기 전에만
+
+개발 머신(16 코어)에서 잰 숫자 중 **배수와 메모리 구성은 서버에서도 그대로**지만, ms·req/s 같은 절대값과
+포화 지점·버스트·스왑은 이 서버(e2-small, vCPU 2, 2GB)에서 다시 재야 한다. 측정하는 동안 서버
+컨테이너를 내리므로 **사용자가 없을 때만** 이 서버에서 잰다. 사용자가 생긴 뒤에는 같은 크기 인스턴스를
+따로 띄워서 같은 스크립트를 돌린다.
+
+```bash
+cd ~/Where-we-go && git pull          # 측정 코드만 받는다. 서버 이미지는 다시 빌드하지 않는다
+tmux new -s perf                      # ssh 가 끊겨도 계속 돈다 (다시 붙기: tmux attach -t perf)
+bash deploy/perf/run-on-server.sh --dry-run            # 확인만
+bash deploy/perf/run-on-server.sh --pgrouting --twice  # 30분~1시간
+```
+
+스크립트가 하는 일: 확인(측정 코드·DB·활성 그래프·ETL 시간) → JDK 25 를 `~/.jdks` 에 받기 →
+**서버 컨테이너 내리기** → 측정하는 내내 `vmstat`·DB 메모리 기록 → 알고리즘 대조 · 동시 요청 스윕
+(`--twice` 면 연달아 두 번) · pgRouting 대조 → 측정용 표·확장 지우고 **서버 다시 띄우기**(실패해도) →
+`perf-results/server-<시각>.tar.gz` 로 묶기. 21:30~23:00 에는 ETL 과 겹쳐서 돌지 않는다.
+
+로컬로 가져오기:
+
+```bash
+gcloud compute scp <인스턴스>:~/Where-we-go/perf-results/server-*.tar.gz . --zone <존>
+```
+
+읽는 순서:
+
+| 파일 | 볼 것 |
+|---|---|
+| `summary.md` | **steal 평균·최대** — 공유 코어가 CPU 를 덜 준 몫. **스왑이 돌았는지** — 돌았으면 그 구간 숫자는 메모리 압박이 섞였다 |
+| `concurrency.md` | 처리량이 몇에서 멈추나 — 코어가 2 개라 **2** 근처일 것이다. 동시 1 의 탐색 시간 |
+| `concurrency-2.md` | 1회차와의 차이 — 오래 달린 뒤 버스트가 줄어든 크기 |
+| `pgrouting.md` + `dbmem.log` | 개발 머신에서 못 잰 **DB 쪽 메모리**. pgRouting 단계 시각에 DB 메모리가 얼마나 튀나 |
+
+끝나면 `docker compose ps` 로 server 가 떠 있는지 본다.
+
 ## 공개 서버에서 달라지는 것
 
 | | 로컬 | 서버 (`docker-compose.prod.yml`) |
