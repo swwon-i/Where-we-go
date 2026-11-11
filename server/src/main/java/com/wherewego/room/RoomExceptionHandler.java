@@ -48,6 +48,12 @@ class RoomExceptionHandler {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("message", e.getMessage()));
     }
 
+    /** 인원이나 후보가 상한에 닿았다. 요청은 맞는데 지금 방 상태와 부딪힌다 — 409. */
+    @ExceptionHandler(RoomService.LimitReachedException.class)
+    ResponseEntity<Map<String, String>> full(RoomService.LimitReachedException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("message", e.getMessage()));
+    }
+
     /**
      * 같은 장소를 두 번 담았다.
      *

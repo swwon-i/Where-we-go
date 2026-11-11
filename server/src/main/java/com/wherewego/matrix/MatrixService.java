@@ -349,8 +349,8 @@ public class MatrixService {
      * <p>붙이지 못해도 <b>그 줄만</b> 실패다. 후보 하나가 서울 밖이라고 행렬 전체를 버리면
      * 나머지 후보를 비교할 기회까지 사라진다.
      *
-     * <p>스냅 결과를 저장하지 않고 매번 구한다. 후보는 열 개 남짓이고 공간 인덱스를 타므로
-     * 싸며, 저장하면 출발지처럼 <b>빌드가 바뀌었는지 따라다녀야 하는 상태</b>가 하나 더 는다.
+     * <p>스냅 결과를 저장하지 않고 매번 구한다. 후보는 많아야 {@code RoomService.MAX_BOOKMARKS}(30)
+     * 곳이고 공간 인덱스를 타므로 싸며, 저장하면 출발지처럼 <b>빌드가 바뀌었는지 따라다녀야 하는 상태</b>가 하나 더 는다.
      */
     private List<Destination> resolveDestinations(
             TransitGraph graph, List<RoomView.BookmarkView> bookmarks) {

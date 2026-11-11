@@ -52,6 +52,33 @@ public class RoomService {
         }
     }
 
+    /** 방의 인원이나 후보가 상한에 닿았다. */
+    public static class LimitReachedException extends RuntimeException {
+        public LimitReachedException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * 방 하나의 최대 인원.
+     *
+     * <p>행렬은 사람마다 탐색을 한 번씩 순서대로 돈다 — 인원이 곧 요청 하나의 무게다. 운영
+     * 서버(e2-small)에서 후보가 서울 전역에 흩어진 최악의 경우 사람 하나에 약 235ms 라, 상한이
+     * 없으면 큰 방 하나가 vCPU 하나를 수십 초 붙잡는다(docs/perf-server.md). 10 명이면 최악이
+     * 약 2.4초이고, 성능 측정이 가정한 "10명 × 20곳"이 서비스의 실제 최악값이 된다.
+     */
+    public static final int MAX_MEMBERS = 10;
+
+    /**
+     * 방 하나의 최대 후보 수.
+     *
+     * <p>후보는 인원만큼 무겁지 않다. one-to-many 라 후보가 늘어도 탐색은 사람마다 한 번이고, 그
+     * 한 번의 비용은 그래프 크기로 막혀 있다. 대신 행렬 요청마다 <b>후보 하나당 스냅 질의 한 번</b>,
+     * <b>칸(인원 × 후보)마다 경로 되짚기 한 번</b>이 들고 응답도 그만큼 커진다. 30 곳이면 행렬이
+     * 최대 10 × 30 = 300 칸이다.
+     */
+    public static final int MAX_BOOKMARKS = 30;
+
     /** 초대 코드가 겹쳤을 때 다시 뽑는 횟수. 32^8 중 하나라 한 번도 안 돌 것이다. */
     private static final int CODE_ATTEMPTS = 5;
 
@@ -82,9 +109,28 @@ public class RoomService {
         return room.id();
     }
 
-    /** 처음 들어올 때만 활동이다. 재입장은 아무것도 바꾸지 않는다. */
+    /**
+     * 처음 들어올 때만 활동이다. 재입장은 아무것도 바꾸지 않는다 — 꽉 찬 방이어도 이미 참가자면
+     * 들어온다. 자리를 더 쓰지 않으니까.
+     *
+     * <h2>방 행을 먼저 잠근다</h2>
+     *
+     * 인원을 세고 넣는 사이에 다른 사람이 들어오면 둘 다 9 를 보고 둘 다 들어온다. 잠그기 전에는
+     * 빈자리 하나에 8명이 동시에 들어오자 8명이 모두 들어가 17명이 됐다(RoomCapacityTest).
+     * {@code FOR UPDATE} 로 방 행을 잡으면 <b>같은 방으로 들어오는 참가만</b> 한 줄로 서고,
+     * 다른 방의 참가는 서로 기다리지 않는다. 잠금은 이 트랜잭션이 끝날 때 풀린다.
+     *
+     * @throws LimitReachedException 새로 들어오는데 {@link #MAX_MEMBERS} 명이 이미 있을 때
+     * @throws NotFoundException 잠그려는 사이에 방이 지워졌을 때
+     */
     private void enter(UUID roomId) {
-        if (repository.join(roomId, accounts.currentUser().id()) > 0) {
+        long me = accounts.currentUser().id();
+        if (!repository.lockRoom(roomId)) throw new NotFoundException("없는 방입니다");
+        if (repository.isMember(roomId, me)) return;
+        if (repository.memberCount(roomId) >= MAX_MEMBERS) {
+            throw new LimitReachedException("방이 꽉 찼습니다 (최대 " + MAX_MEMBERS + "명)");
+        }
+        if (repository.join(roomId, me) > 0) {
             repository.touchActivity(roomId);
         }
     }
@@ -214,6 +260,20 @@ public class RoomService {
 
     // ── 북마크 ──────────────────────────────────────────────────────────────
 
+    /**
+     * 후보 자리가 남았는지 본다. 인원 상한과 같은 이유로 방 행을 먼저 잠근다 — 29 곳인 방에 여럿이
+     * 동시에 담으면 다 같이 29 를 보고 다 들어간다({@link #enter} 참고).
+     *
+     * @throws LimitReachedException {@link #MAX_BOOKMARKS} 곳이 이미 있을 때
+     */
+    private void reserveBookmarkSlot(UUID roomId) {
+        if (!repository.lockRoom(roomId)) throw new NotFoundException("없는 방입니다");
+        if (repository.bookmarkCount(roomId) >= MAX_BOOKMARKS) {
+            throw new LimitReachedException(
+                    "후보는 한 방에 " + MAX_BOOKMARKS + "곳까지 담을 수 있습니다. 하나를 빼고 담아 주세요");
+        }
+    }
+
     /** 우리 POI 에서 고른다. 이름·좌표는 이 시점의 값으로 복사된다. */
     @Transactional
     public long addBookmarkFromPoi(UUID roomId, long poiId) {
@@ -221,6 +281,7 @@ public class RoomService {
         var poi = repository
                 .poiSnapshot(poiId)
                 .orElseThrow(() -> new NotFoundException("없는 장소입니다: " + poiId));
+        reserveBookmarkSlot(roomId);
         long bookmarkId = repository.addBookmark(
                 roomId, me, poiId, poi.name(), poi.address(), poi.lng(), poi.lat());
         repository.touchActivity(roomId);
@@ -231,6 +292,7 @@ public class RoomService {
     @Transactional
     public long addBookmarkAtPoint(UUID roomId, String name, double lng, double lat) {
         var me = requireMember(roomId);
+        reserveBookmarkSlot(roomId);
         long bookmarkId = repository.addBookmark(roomId, me, null, name.strip(), null, lng, lat);
         repository.touchActivity(roomId);
         return bookmarkId;

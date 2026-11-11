@@ -92,11 +92,22 @@ function joinPrompt() {
       <h2>초대받은 방</h2>
       <p class="sub">들어가면 참가자와 후보 장소를 볼 수 있습니다.</p>
       <button id="join" class="primary">참가하기</button>
+      <em id="join-error" class="form-error" hidden></em>
     </div>
   `);
+  const joinError = $('#join-error');
   $('#join').onclick = (e) =>
     busy(e.target, async () => {
-      await api.joinRoom(roomId);
+      joinError.hidden = true;
+      try {
+        await api.joinRoom(roomId);
+      } catch (err) {
+        // 꽉 찬 방(409) 같은 거절을 말없이 삼키면 버튼이 고장 난 것처럼 보인다.
+        joinError.textContent =
+          err instanceof ApiError ? err.message : '서버에 연결하지 못했습니다.';
+        joinError.hidden = false;
+        return;
+      }
       await roomPage({ roomId });
     });
 }
@@ -303,7 +314,14 @@ async function setUpMap() {
     } else if (pickMode === 'bookmark') {
       const name = prompt('이 자리의 이름을 붙여 주세요', '새 후보');
       if (name?.trim()) {
-        await api.addBookmark(roomId, { name: name.trim(), ...point });
+        try {
+          await api.addBookmark(roomId, { name: name.trim(), ...point });
+        } catch (err) {
+          // 후보 상한(409) 같은 거절을 말없이 삼키면 찍어도 아무 일이 없는 것처럼 보인다.
+          // 검색 카드의 "담기"와 같은 방식으로 알린다.
+          alert(err instanceof ApiError ? err.message : '담지 못했습니다.');
+          return;
+        }
         pickMode = null;
         await refresh();
       }

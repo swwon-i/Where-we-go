@@ -374,6 +374,26 @@ public class RoomRepository {
                 new MapSqlParameterSource().addValue("room", roomId).addValue("uid", userId));
     }
 
+    /**
+     * 방 행을 잠근다. 트랜잭션이 끝날 때까지 같은 방을 잠그려는 다른 트랜잭션은 기다린다.
+     *
+     * @return 방이 있었는가
+     */
+    boolean lockRoom(UUID roomId) {
+        return !jdbc.queryForList(
+                        "SELECT 1 FROM room WHERE id = :room FOR UPDATE",
+                        new MapSqlParameterSource("room", roomId),
+                        Integer.class)
+                .isEmpty();
+    }
+
+    int bookmarkCount(UUID roomId) {
+        return jdbc.queryForObject(
+                "SELECT count(*) FROM bookmark WHERE room_id = :room",
+                new MapSqlParameterSource("room", roomId),
+                Integer.class);
+    }
+
     int memberCount(UUID roomId) {
         return jdbc.queryForObject(
                 "SELECT count(*) FROM room_member WHERE room_id = :room",
