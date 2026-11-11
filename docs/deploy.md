@@ -284,6 +284,8 @@ gcloud compute scp <인스턴스>:~/Where-we-go/perf-results/server-*.tar.gz . -
 
 끝나면 `docker compose ps` 로 server 가 떠 있는지 본다.
 
+첫 측정 결과(2026-11-11, `--twice`)는 [perf-server.md](perf-server.md) 에 정리했다.
+
 ## 공개 서버에서 달라지는 것
 
 | | 로컬 | 서버 (`docker-compose.prod.yml`) |

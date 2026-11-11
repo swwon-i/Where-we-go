@@ -2,6 +2,8 @@
 
 `./gradlew sweepTest` 가 만든 결과(`server/build/reports/perf/concurrency.md`)를 옮겨 둔 것이다. 측정 코드는 `server/src/test/java/com/wherewego/routing/ConcurrencySweepTest.java`. 힙 512MB, 코어 16 개짜리 개발 머신에서 돌린 회차다 — 절대값(ms, req/s)은 서버에서 다시 재야 하고, 배수와 메모리 구성은 하드웨어가 바뀌어도 유지된다.
 
+> 운영 서버(e2-small)에서 같은 측정을 돌린 결과는 [perf-server.md](perf-server.md). 메모리 구성과 힙 천장은 그대로였지만, **§3 의 작업공간 풀은 지연 득실이 반대로 나왔다** — 서버에서는 중앙값을 내주고 처리량을 산다.
+
 - 측정 시각 2026-11-10T23:22:34
 - JVM 25.0.4.1 · 최대 힙 512MB · 코어 16
 - 시간대 19시 · 씨앗 42 · 후보 20곳(서울 전역) · 커넥션 풀 30 · 수준마다 요청 3×동시수
