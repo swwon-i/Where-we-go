@@ -82,7 +82,17 @@ class PgRoutingCompareTest {
     private static final int HOUR = 19;
     private static final long SEED = 42;
     private static final int TARGETS = 20;
-    private static final int[] LEVELS = {1, 4, 16};
+    /**
+     * 동시 수준. <b>코어 수까지만</b> 올린다.
+     *
+     * <p>pgRouting 은 호출마다 DB 프로세스 안에 간선 60만 개짜리 그래프를 짓는다. 동시 N 이면
+     * N 벌이다. 개발 머신(16 코어, 메모리 넉넉)에서는 1·2·4·16 이 다 돌지만, 운영 서버(vCPU 2,
+     * 2GB)에서 16 벌을 지으면 DB 가 메모리 부족으로 죽을 수 있다. 코어 수를 넘겨 올려 봐야
+     * CPU 바운드라 처리량도 더 안 나오므로, 코어 수에서 멈춰도 잃는 것이 없다.
+     */
+    private static final int[] LEVELS = java.util.stream.IntStream.of(1, 2, 4, 16)
+            .filter(c -> c <= Runtime.getRuntime().availableProcessors())
+            .toArray();
     private static final int REPEATS = 3;
     private static final int MIN_REQUESTS = 10;
     private static final int WARMUP = 2;

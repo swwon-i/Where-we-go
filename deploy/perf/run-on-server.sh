@@ -5,11 +5,12 @@
 #   tmux new -s perf                      # ssh 가 끊겨도 계속 돌게
 #   deploy/perf/run-on-server.sh --pgrouting --twice
 #
-# ── 링크를 돌리기 전에만 쓴다 ─────────────────────────────────────────────────
-#   측정하는 동안 서버 컨테이너를 내린다(서비스가 멈춘다). 측정 JVM 과 운영 서버 JVM 이
-#   2GB 를 나눠 쓰면 스왑으로 밀려서 측정이 오염되기 때문이다. 내리면 "VM 하나에 앱 하나 +
-#   DB" 가 되고, 그게 지금 운영 구조 그대로다 — 측정 JVM 이 앱 자리에 선다.
-#   사용자가 생긴 뒤에는 같은 크기 인스턴스를 따로 띄워서 잰다.
+# ── 서비스가 멈춘다 ─────────────────────────────────────────────────────────
+#   측정하는 동안 서버 컨테이너를 내린다. 측정 JVM 과 운영 서버 JVM 이 2GB 를 나눠 쓰면
+#   스왑으로 밀려서 측정이 오염되기 때문이다. 내리면 "VM 하나에 앱 하나 + DB" 가 되고, 그게
+#   지금 운영 구조 그대로다 — 측정 JVM 이 앱 자리에 선다.
+#   사용자가 있으면 쓰는 사람이 없는 시간(새벽)에 돌린다. 시작 전에 최근 30분 동안의 행렬
+#   계산 수를 보여준다 — 0 이 아니면 누가 쓰고 있다는 뜻이다. 짧게 끝내려면 --only-pgrouting.
 #
 # ── 무엇을 하나 ─────────────────────────────────────────────────────────────
 #   1. 확인: 저장소에 측정 코드가 있는지, DB 가 떴는지, 활성 그래프가 있는지, ETL(22:00) 시간이 아닌지
@@ -24,6 +25,8 @@
 #
 # ── 옵션 ────────────────────────────────────────────────────────────────────
 #   --pgrouting   pgRouting 을 DB 컨테이너에 넣고 대조 측정까지 (컨테이너를 다시 만들면 사라진다)
+#   --only-pgrouting  pgRouting 대조만 돈다 (알고리즘·스윕은 건너뛴다). 서버가 멈추는 시간이
+#                 15분 안쪽으로 줄어든다. 동시 수준은 코어 수까지만 오른다(vCPU 2 면 1·2)
 #   --twice       동시 요청 스윕을 연달아 한 번 더. e2-small 은 공유 코어라 부하가 오래가면
 #                 버스트가 줄어든다 — 1회차(쉬던 상태)와 2회차(오래 달린 뒤)의 차이가 그 크기다
 #   --yes         확인 질문 없이 진행
@@ -34,12 +37,14 @@
 set -euo pipefail
 
 WITH_PGR=0
+ONLY_PGR=0
 TWICE=0
 ASSUME_YES=0
 DRY_RUN=0
 for arg in "$@"; do
     case "$arg" in
         --pgrouting) WITH_PGR=1 ;;
+        --only-pgrouting) WITH_PGR=1; ONLY_PGR=1 ;;
         --twice) TWICE=1 ;;
         --yes) ASSUME_YES=1 ;;
         --dry-run) DRY_RUN=1 ;;
@@ -90,6 +95,17 @@ command -v vmstat >/dev/null || die "vmstat 이 없다 (sudo apt install procps)
 
 PGR_BEFORE="$(psql_q "SELECT count(*) FROM pg_extension WHERE extname='pgrouting'")"
 
+# 지금 누가 쓰고 있는지. 행렬 계산 기록은 위치 없이 숫자만 남는다(matrix_run).
+RECENT_RUNS="$(psql_q "SELECT count(*) FROM matrix_run WHERE created_at > now() - interval '30 minutes'" || echo '?')"
+
+if [ $ONLY_PGR = 1 ]; then
+    PLAN="pgRouting 대조만"
+    TAKES="10~15분"
+else
+    PLAN="알고리즘 대조 → 동시 요청 스윕$( [ $TWICE = 1 ] && echo ' ×2' )$( [ $WITH_PGR = 1 ] && echo ' → pgRouting 대조' )"
+    TAKES="30분~1시간"
+fi
+
 cat <<EOF
 
   측정 계획
@@ -97,12 +113,13 @@ cat <<EOF
   저장소      $ROOT ($(git rev-parse --short HEAD 2>/dev/null || echo '?'))
   활성 빌드   #$ACTIVE_BUILD
   CPU · 메모리 $(nproc) vCPU · $(free -m | awk '/^Mem:/{print $2}')MB · 스왑 $(free -m | awk '/^Swap:/{print $2}')MB
-  측정        알고리즘 대조 → 동시 요청 스윕$( [ $TWICE = 1 ] && echo ' ×2' )$( [ $WITH_PGR = 1 ] && echo ' → pgRouting 대조' )
+  측정        $PLAN
+  최근 사용   지난 30분 동안 행렬 계산 ${RECENT_RUNS}건$( [ "$RECENT_RUNS" != "0" ] && echo '  ← 누가 쓰고 있다. 새벽에 돌리는 게 낫다' )
   힙          스윕 $SWEEP_HEAP (운영 기본값과 같다) · 나머지 $PERF_HEAP
   결과        $OUT.tar.gz
 
   ⚠ 측정하는 동안 서버 컨테이너를 내린다. 서비스가 멈춘다.
-    끝나면(실패해도) 다시 띄운다. 30분~1시간 걸린다.
+    끝나면(실패해도) 다시 띄운다. ${TAKES} 걸린다.
 
 EOF
 
@@ -240,10 +257,12 @@ step() {
 say "컴파일"
 (cd server && "${GRADLE[@]}" testClasses) >> "$OUT/run.log" 2>&1 || die "컴파일 실패 — $OUT/run.log"
 
-step algorithms   algorithms.md   algorithmTest "-PperfHeap=$PERF_HEAP"
-step concurrency  concurrency.md  sweepTest     "-PsweepHeap=$SWEEP_HEAP"
-if [ $TWICE = 1 ]; then
-    step concurrency-2 concurrency.md sweepTest "-PsweepHeap=$SWEEP_HEAP"
+if [ $ONLY_PGR = 0 ]; then
+    step algorithms   algorithms.md   algorithmTest "-PperfHeap=$PERF_HEAP"
+    step concurrency  concurrency.md  sweepTest     "-PsweepHeap=$SWEEP_HEAP"
+    if [ $TWICE = 1 ]; then
+        step concurrency-2 concurrency.md sweepTest "-PsweepHeap=$SWEEP_HEAP"
+    fi
 fi
 if [ $WITH_PGR = 1 ]; then
     step pgrouting pgrouting.md pgroutingTest "-PperfHeap=$PERF_HEAP"
